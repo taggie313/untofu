@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    fontfetch's mark. A "tofu" box — the empty rectangle every renderer shows
+    when it has no glyph — with a real letterform standing in it and breaking
+    past its edges. That is the whole tool in one image: the placeholder is
+    what you had, the letter is what arrives.
+
+    The box is deliberately secondary, at low opacity and a thin stroke, so
+    that at favicon size the A dominates and the icon still reads as "type"
+    rather than dissolving into a grid of lines.
+
+    FULL BLEED on purpose, same reasoning as ClickGraft: macOS masks icons into
+    the system shape itself, so artwork carrying its own rounded rect and
+    transparent margin comes out as a small tile floating on a white square.
+    The web copy gets its corners from CSS instead.
+  -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0"    stop-color="#6B63E8"/>
+      <stop offset="0.55" stop-color="#4038B8"/>
+      <stop offset="1"    stop-color="#241C6E"/>
+    </linearGradient>
+    <filter id="lift" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#140F45" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#tile)"/>
+
+  <!-- The placeholder: a missing-glyph box. -->
+  <rect x="286" y="286" width="452" height="452" rx="44"
+        fill="none" stroke="#FBF6EC" stroke-opacity="0.42" stroke-width="34"/>
+
+  <!-- The glyph that arrived, overrunning the box top and bottom. -->
+  <g filter="url(#lift)" stroke="#FBF6EC" stroke-width="88"
+     fill="none" stroke-linecap="butt" stroke-linejoin="miter">
+    <path d="M 348 764 L 512 302 L 676 764"/>
+    <path d="M 406 640 L 618 640"/>
+  </g>
+</svg>

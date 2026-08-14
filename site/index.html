@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fontfetch — missing fonts, fetched instead of complained about</title>
+<meta name="description" content="Open a document with fonts you don't have and macOS substitutes something else, then asks which replacements you'd like. fontfetch answers the request instead: it finds the font, fetches it, and hands it to the app. Free and open source.">
+
+<meta property="og:title" content="fontfetch">
+<meta property="og:description" content="Missing fonts, fetched instead of complained about. Free and open source.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://fontfetch.elusive.net/">
+<meta property="og:image" content="https://fontfetch.elusive.net/og.jpg">
+<meta property="og:image:width" content="640">
+<meta property="og:image:height" content="640">
+<meta property="og:image:alt" content="The fontfetch mark: a letter A standing in a missing-glyph box">
+<meta name="twitter:card" content="summary">
+
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+
+<style>
+/* One accent, one font stack, no external requests. The whole page is a
+   single file so it can be dropped on any host without a build step. */
+:root {
+  --bg:      #fbfbfa;
+  --panel:   #ffffff;
+  --ink:     #16181c;
+  --muted:   #5c646e;
+  --faint:   #8a929c;
+  --rule:    #e3e5e8;
+  --accent:  #4038b8;
+  --accent-ink: #ffffff;
+  --warm:    #fff8e8;
+  --warm-rule: #e8d9b0;
+  --warm-ink:  #6b4e12;
+  --good:    #eeedf8;
+  --term:    #201d3f;
+  --term-ink: #e8e6fb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:     #16181b;
+    --panel:  #1d2024;
+    --ink:    #e9ebee;
+    --muted:  #a2abb5;
+    --faint:  #79828c;
+    --rule:   #2c3036;
+    --accent: #9b93ff;
+    --accent-ink: #17123f;
+    --warm:   #2a2418;
+    --warm-rule: #4d411f;
+    --warm-ink:  #e3c37a;
+    --good:   #1e1c2e;
+    --term:   #12102b;
+    --term-ink: #e8e6fb;
+  }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        Helvetica, Arial, sans-serif;
+  text-rendering: optimizeLegibility;
+}
+.wrap { max-width: 680px; margin: 0 auto; padding: 0 24px; }
+
+h1, h2, h3 { line-height: 1.25; letter-spacing: -0.015em; }
+h1 { font-size: clamp(2.1rem, 6vw, 2.9rem); margin: 0 0 .35em; font-weight: 680; }
+h2 { font-size: 1.35rem; margin: 3.2rem 0 .9rem; font-weight: 650; }
+h3 { font-size: 1rem;    margin: 1.9rem 0 .4rem; font-weight: 650; }
+p  { margin: 0 0 1.05em; }
+a  { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+strong { font-weight: 640; }
+code, .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .875em;
+}
+code { background: color-mix(in srgb, var(--ink) 7%, transparent);
+       padding: .12em .38em; border-radius: 4px; }
+
+/* ---- masthead ---- */
+header { padding: clamp(3.5rem, 9vw, 6rem) 0 0; }
+.brand { display: flex; align-items: center; gap: 18px; margin: 0 0 .35em; }
+.brand h1 { margin: 0; }
+/* icon.svg is deliberately square — macOS masks icons itself, so the file
+   cannot carry its own rounded corners. The web copy gets them here. */
+.mark { border-radius: 22.4%; flex: 0 0 auto; width: clamp(56px, 11vw, 76px);
+        height: auto; box-shadow: 0 2px 10px rgba(0,0,0,.18); }
+.lede { font-size: 1.19rem; color: var(--muted); margin: 0 0 2rem; max-width: 34em; }
+
+.term {
+  background: var(--term); color: var(--term-ink); border-radius: 10px;
+  padding: 1.05rem 1.2rem; margin: 0 0 1rem; overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .855rem; line-height: 1.75;
+}
+.term .p { color: #8f87d8; user-select: none; }
+.term .c { color: #7d76b0; }
+
+.alt { color: var(--muted); text-decoration: none; font-weight: 550; font-size: .95rem; }
+.alt:hover { color: var(--accent); }
+.disclaim { font-size: .84rem; color: var(--faint); margin: 1.2rem 0 0; }
+
+/* ---- tables ---- */
+table { border-collapse: collapse; width: 100%; font-size: .95rem; margin: 0 0 .8rem; }
+th, td { text-align: left; padding: .58em .3em; border-bottom: 1px solid var(--rule); }
+thead th { font-size: .78rem; text-transform: uppercase; letter-spacing: .05em;
+           color: var(--faint); font-weight: 600; border-bottom-width: 1.5px; }
+td.yes { font-weight: 660; color: var(--accent); }
+td.no  { font-weight: 660; color: var(--warm-ink); }
+.tablewrap { overflow-x: auto; }
+
+/* ---- blocks ---- */
+.panel {
+  background: var(--panel); border: 1px solid var(--rule);
+  border-radius: 11px; padding: 1.15rem 1.3rem; margin: 1.4rem 0;
+}
+.panel.good { background: var(--good); border-color: transparent; }
+.panel.warn { background: var(--warm); border-color: var(--warm-rule); }
+.panel.warn h3 { color: var(--warm-ink); margin-top: 0; }
+.panel > :last-child { margin-bottom: 0; }
+.panel p { font-size: .95rem; }
+
+.facts { list-style: none; padding: 0; margin: 1.2rem 0; }
+.facts li { padding: .55rem 0 .55rem 1.5rem; position: relative; font-size: .97rem; }
+.facts li::before {
+  content: ""; position: absolute; left: 0; top: 1.02em;
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
+}
+.facts b { font-weight: 640; }
+.facts span { color: var(--muted); }
+
+footer {
+  margin: 5rem 0 0; border-top: 1px solid var(--rule);
+  padding: 2rem 0 4rem; font-size: .875rem; color: var(--faint);
+}
+footer a { color: var(--muted); }
+footer p { margin: 0 0 .7em; }
+</style>
+</head>
+<body>
+
+<header class="wrap">
+  <div class="brand">
+    <img class="mark" src="icon.svg" width="72" height="72"
+         alt="fontfetch: a letter A standing in a missing-glyph box">
+    <h1>fontfetch</h1>
+  </div>
+  <p class="lede">Open a document built with fonts you don't have and macOS
+     quietly swaps in something else, then asks which replacements you'd like.
+     fontfetch answers the request instead: it finds the font, fetches it, and
+     hands it to the application that asked.</p>
+
+  <pre class="term"><span class="p">$</span> brew tap taggie313/tap
+<span class="p">$</span> brew trust taggie313/tap
+<span class="p">$</span> brew install fontfetch
+<span class="p">$</span> brew services start fontfetch</pre>
+
+  <p><a class="alt" href="https://github.com/taggie313/fontfetch">Source on GitHub &rarr;</a></p>
+
+  <p class="disclaim">Free and open source under the MIT licence. Fetches only
+     openly-licensed families from Google Fonts; it will not obtain a commercial
+     font for you, and does not try to.</p>
+</header>
+
+<main class="wrap">
+
+<h2>The dialog</h2>
+
+<p>Every so often a document arrives that was set in a font your Mac has never
+seen. Keynote, Pages and PowerPoint all handle it the same way: substitute
+something roughly the right shape, then offer you a list and ask which
+replacement you would like. The layout has already moved by the time you see
+it.</p>
+
+<p>The awkward part is that a great many of those fonts are <strong>free</strong>.
+Raleway, Lora, Karla, Rubik and around eighteen hundred other families are
+openly licensed and a few hundred kilobytes away. The dialog doesn't mention
+that. It just asks you to pick something else.</p>
+
+<h2>What it does instead</h2>
+
+<p>macOS has a system-wide hook that fires whenever any application asks for a
+font it can't resolve. fontfetch listens on it. When the request is for a family
+it can obtain, it fetches the font and hands the file straight back to the
+asking application — no installer, no Font Book, no dialog.</p>
+
+<ul class="facts">
+  <li><b>Cached first, always.</b> <span>The hook runs with the asking app's
+      text layout blocked behind it, so a font already cached is a dictionary
+      lookup and nothing else. Nothing on the network happens there.</span></li>
+  <li><b>One download covers the family.</b> <span>Fetching one weight indexes
+      every face in the file. Asking for Raleway indexes eighteen names.</span></li>
+  <li><b>It verifies before it caches.</b> <span>A downloaded file has to
+      actually answer to the exact name that was requested. A family-name match
+      is not good enough, and getting this wrong fails silently.</span></li>
+  <li><b>It says so when it can't.</b> <span>If a font isn't obtainable you get
+      told which one, why, and where to look for it.</span></li>
+</ul>
+
+<p>Because the fetch happens in the background, the document that triggered it
+has already drawn itself with a substitute. Reopen it and the real font is
+there. Everything after that is instant.</p>
+
+<h2>Where it works</h2>
+
+<p>Each of these was checked by building a document against a font, removing
+that font from the machine, and opening the document with fontfetch running.</p>
+
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Application</th><th>Works</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td>Keynote</td><td class="yes">yes</td><td>Rendered a font installed nowhere on the system</td></tr>
+    <tr><td>Preview</td><td class="yes">yes</td><td>PDFs that reference a font without embedding it</td></tr>
+    <tr><td>PowerPoint</td><td class="yes">yes</td><td>Including bare theme-font names with no style</td></tr>
+    <tr><td>Adobe Acrobat</td><td class="no">no</td><td>Resolves fonts internally, never asks the system</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Acrobat is the one real gap. It has its own font engine and its own
+substitution, and never consults macOS at all — which is presumably why Adobe
+built font activation into their applications rather than relying on the system.
+Inside Acrobat, use Adobe Fonts.</p>
+
+<h2>What it won't do</h2>
+
+<div class="panel warn">
+  <h3>It can't get you a commercial font</h3>
+  <p>fontfetch fetches from the openly-licensed Google Fonts catalogue and
+  nothing else. If a document wants a licensed typeface, no tool should quietly
+  go and get it for you, and this one doesn't. It tells you what's missing and
+  points at Adobe Fonts, MyFonts, Fontspring and WhatTheFont so you can sort out
+  a licence yourself.</p>
+</div>
+
+<div class="panel warn">
+  <h3>Apple may remove the hook it depends on</h3>
+  <p>The system hook fontfetch uses has been marked deprecated since macOS 11,
+  with a note saying it will be removed in a future release. It still works on
+  macOS 26, fifteen releases later, but that removal is the expected end of this
+  tool's life. If it happens, fontfetch exits with a clear message and missing
+  fonts behave exactly as they did before it was installed. Nothing breaks; it
+  just stops helping.</p>
+</div>
+
+<p>It also stays out of the way of fonts it knows it can never supply. Opening
+any PowerPoint file asks for Calibri, Aptos and Segoe UI; those are declined in
+about ten milliseconds, without a network request and without bothering you
+about fonts you can do nothing about.</p>
+
+<h2>How it works</h2>
+
+<p>The hook is <code>CTFontManagerCreateFontRequestRunLoopSource</code>, a
+CoreText facility that hands your process the font requests of every other
+process, along with the PostScript name being asked for. Return a file and the
+system issues a sandbox extension for it to the requesting application — which
+is what allows a sandboxed app like Keynote to read a font file it was never
+granted access to.</p>
+
+<p>The whole thing is a background launchd agent. There is no window, no menu
+bar item and nothing in the Dock. It is invisible until it has something to say.
+The <a href="https://github.com/taggie313/fontfetch">README</a> documents the
+undocumented parts, including the return type the headers don't specify and the
+crash you get for guessing wrong.</p>
+
+<div class="panel good">
+  <p><strong>Already have a font manager?</strong> RightFont, Typeface and
+  FontBase all auto-activate fonts from a library you already own. fontfetch
+  solves the other half — the font you don't have yet — and is happy to sit
+  alongside them.</p>
+</div>
+
+</main>
+
+<footer class="wrap">
+  <p>fontfetch is free and open source under the MIT licence.
+     <a href="https://github.com/taggie313/fontfetch">Source and issues on GitHub</a>.</p>
+  <p>Fonts fetched by this tool carry their own licences — everything in the
+     Google Fonts catalogue is OFL, Apache 2.0 or UFL. fontfetch downloads and
+     caches them for your own use; it does not redistribute them.</p>
+  <p>Built by <a href="https://elusive.net">Elusive</a>. Not affiliated with
+     Apple, Adobe, Google or Microsoft.</p>
+</footer>
+
+</body>
+</html>

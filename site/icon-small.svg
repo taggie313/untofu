@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!--
+    The 16px slice of the favicon only. At that size the placeholder box and the
+    letterform collide into a grey smudge, so the small slice drops the box and
+    lets a heavier A fill the tile. ICO stores each size as its own image, so
+    this costs nothing at 32px and above, which keep the full mark.
+  -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0"    stop-color="#6B63E8"/>
+      <stop offset="0.55" stop-color="#4038B8"/>
+      <stop offset="1"    stop-color="#241C6E"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#tile)"/>
+  <g stroke="#FBF6EC" stroke-width="132" fill="none" stroke-linecap="butt" stroke-linejoin="miter">
+    <path d="M 286 828 L 512 208 L 738 828"/>
+    <path d="M 372 648 L 652 648"/>
+  </g>
+</svg>

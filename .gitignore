@@ -3,3 +3,8 @@
 *.xcodeproj
 .DS_Store
 scratch/
+
+# Deploy target and the tunnel token never get committed.
+site/deploy/deploy.env
+site/deploy/.env
+site/deploy/html/

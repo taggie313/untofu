@@ -20,13 +20,27 @@ is invisible until it has something to say.
 ## Install
 
 ```bash
+brew tap taggie313/tap
+brew trust taggie313/tap
+brew install fontfetch
+brew services start fontfetch
+```
+
+`brew trust` is required by Homebrew 6 for any third-party tap; the install is
+refused without it.
+
+Or from source:
+
+```bash
 swift build -c release
 ./.build/release/fontfetch install
 ```
 
 `install` copies the binary to `~/Library/Application Support/fontfetch/bin/` and
 registers a login agent, so a later `swift build --clean` or a moved checkout
-won't silently break it.
+won't silently break it. Use one mechanism or the other, never both — two agents
+sharing one cache race over it, so `install` refuses when a Homebrew-managed
+service is loaded and `fontfetch status` reports each of them.
 
 ```
 fontfetch status             hook availability, agent state, cache size
