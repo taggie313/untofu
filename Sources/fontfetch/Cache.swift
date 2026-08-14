@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// On-disk font cache plus the in-memory index the hot path reads.
@@ -24,7 +25,17 @@ final class Cache {
 
     init() {
         try? FileManager.default.createDirectory(at: fontsDir, withIntermediateDirectories: true)
+        sweepScratch()
         reload()
+    }
+
+    /// Clears staging directories orphaned by a fetch that was killed mid-flight.
+    private func sweepScratch() {
+        let contents = try? FileManager.default.contentsOfDirectory(
+            at: fontsDir, includingPropertiesForKeys: nil)
+        for url in contents ?? [] where url.lastPathComponent.hasPrefix(".incoming") {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     // MARK: - Hot path
@@ -113,15 +124,52 @@ final class Cache {
         lock.unlock()
     }
 
+    /// Read-modify-write under a cross-process lock.
+    ///
+    /// More than one process touches these files: a `fontfetch fetch` run beside
+    /// the login agent, or several concurrent fetches. Each holds its own
+    /// in-memory view, so a blind overwrite silently drops whatever the others
+    /// added — last writer wins and the rest of the work evaporates.
     private func persist() {
-        lock.lock()
-        let snapshotIndex = index
-        let snapshotNegative = negative.mapValues { $0.timeIntervalSince1970 }
-        lock.unlock()
+        withFileLock {
+            var mergedIndex = Cache.decode([String: String].self, from: indexURL) ?? [:]
+            var mergedNegative = Cache.decode([String: Double].self, from: negativeURL) ?? [:]
 
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(snapshotIndex) { try? data.write(to: indexURL) }
-        if let data = try? encoder.encode(snapshotNegative) { try? data.write(to: negativeURL) }
+            lock.lock()
+            let mineIndex = index
+            let mineNegative = negative.mapValues { $0.timeIntervalSince1970 }
+            lock.unlock()
+
+            // Ours wins on conflict: we just verified the file on disk.
+            mergedIndex.merge(mineIndex) { _, mine in mine }
+            mergedNegative.merge(mineNegative) { _, mine in mine }
+
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            if let data = try? encoder.encode(mergedIndex) { try? data.write(to: indexURL) }
+            if let data = try? encoder.encode(mergedNegative) { try? data.write(to: negativeURL) }
+
+            // Adopt the merged view, so this process can serve what the others fetched.
+            lock.lock()
+            index = mergedIndex
+            negative = mergedNegative.mapValues { Date(timeIntervalSince1970: $0) }
+            lock.unlock()
+        }
+    }
+
+    private static func decode<T: Decodable>(_ type: T.Type, from url: URL) -> T? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
+    private var lockURL: URL { Cache.root.appendingPathComponent("index.lock") }
+
+    private func withFileLock(_ body: () -> Void) {
+        let fd = open(lockURL.path, O_CREAT | O_RDWR, 0o644)
+        guard fd >= 0 else { body(); return }   // no lock is better than no write
+        flock(fd, LOCK_EX)
+        body()
+        flock(fd, LOCK_UN)
+        close(fd)
     }
 }

@@ -8,13 +8,15 @@ import Foundation
 final class Provider {
     private let cache: Cache
     private let notifier: Notifier?
+    private let reporter: UnresolvedReporter?
     private let queue = DispatchQueue(label: "net.elusive.fontfetch.resolve", qos: .utility)
     private let inFlightLock = NSLock()
     private var inFlight = Set<String>()
 
-    init(cache: Cache, notifier: Notifier? = nil) {
+    init(cache: Cache, notifier: Notifier? = nil, reporter: UnresolvedReporter? = nil) {
         self.cache = cache
         self.notifier = notifier
+        self.reporter = reporter
     }
 
     func start() -> Bool {
@@ -32,14 +34,14 @@ final class Provider {
             return path
         }
         Log.info("miss \(psName)  (pid \(pid)) — resolving in background")
-        enqueue(psName)
+        enqueue(psName, pid: pid)
         return nil
     }
 
     /// Schedules a fetch, collapsing duplicates. A document with the same missing
     /// font on forty slides produces one request storm; without this, forty
     /// concurrent downloads.
-    private func enqueue(_ psName: String) {
+    private func enqueue(_ psName: String, pid: pid_t) {
         guard cache.shouldAttempt(psName) else {
             Log.debug("skipping \(psName): failed recently")
             return
@@ -52,8 +54,13 @@ final class Provider {
 
         queue.async { [weak self] in
             guard let self else { return }
+            // Resolved here rather than in handle(): naming the app costs a
+            // subprocess, which must stay off the blocking path.
+            let app = Notifier.appName(for: pid)
             Fetcher.fetch(psName: psName, into: self.cache,
-                          notify: { [weak self] in self?.notifier?.record(family: $0) })
+                          observer: Fetcher.Observer(
+                              resolved: { [weak self] in self?.notifier?.record(family: $0, app: app) },
+                              unresolved: { [weak self] in self?.reporter?.record(psName: $0) }))
             self.inFlightLock.lock()
             self.inFlight.remove(key)
             self.inFlightLock.unlock()

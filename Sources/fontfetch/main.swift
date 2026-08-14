@@ -20,10 +20,14 @@ func usage() -> Never {
       fontfetch list               List cached faces.
       fontfetch verify             Drop index entries whose file has gone missing.
       fontfetch notify-test        Post a sample notification banner.
+      fontfetch dialog-test        Show the "couldn't find it" dialog.
 
     OPTIONS
       -v, --verbose                Log resolution steps.
-      -q, --quiet                  Do not post notifications (run only).
+      -q, --quiet                  Say nothing at all (run only).
+          --banner                 Announce successes as a transient banner
+                                   instead of a dialog needing dismissal.
+          --no-dialog              Suppress the "couldn't find it" dialog.
 
     ENVIRONMENT
       GITHUB_TOKEN                 Raises the google/fonts listing rate limit above
@@ -36,7 +40,11 @@ switch positional.first ?? "" {
 
 case "run":
     let quiet = flags.contains("--quiet") || flags.contains("-q")
-    let provider = Provider(cache: cache, notifier: quiet ? nil : Notifier())
+    let noDialog = quiet || flags.contains("--no-dialog")
+    let style: Notifier.Style = flags.contains("--banner") ? .banner : .dialog
+    let provider = Provider(cache: cache,
+                            notifier: quiet ? nil : Notifier(style: style),
+                            reporter: noDialog ? nil : UnresolvedReporter())
     guard provider.start() else {
         Log.warn("""
         CTFontManagerCreateFontRequestRunLoopSource is unavailable on this system.
@@ -124,6 +132,13 @@ case "notify-test":
                   body: "Raleway, Lora, and Playfair Display — reopen the document to see them.")
     print("Posted a sample banner. If nothing appeared, check System Settings > "
         + "Notifications > Script Editor — banners posted this way are attributed there.")
+
+case "dialog-test":
+    let reporter = UnresolvedReporter()
+    reporter.record(psName: positional.count > 1 ? positional[1] : "HelveticaNeueLTPro-Bd")
+    if positional.count > 2 { reporter.record(psName: positional[2]) }
+    // The reporter debounces, then blocks on the dialog; hold the process open.
+    Thread.sleep(forTimeInterval: TimeInterval(600))
 
 default:
     usage()

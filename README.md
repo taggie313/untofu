@@ -123,6 +123,31 @@ Code injection into iWork is not a viable alternative: library validation plus
 hardened runtime means no `DYLD_INSERT_LIBRARIES` without disabling SIP and AMFI
 machine-wide. This hook is the sanctioned path.
 
+### Application compatibility
+
+Each of these was tested by authoring a document against a font, removing that
+font from the system, and opening the document with fontfetch running.
+
+| Application | Consults the hook | Notes |
+| --- | --- | --- |
+| Keynote | yes | Rendered `Lora-Regular` with the font installed nowhere |
+| Preview | yes | Non-embedded `/BaseFont /Karla-Regular` in a PDF |
+| PowerPoint | yes | Asks by PostScript name even when the file says `typeface="Karla"` |
+| **Adobe Acrobat** | **no** | Opened the same PDF and made no font request at all |
+
+Acrobat is the interesting failure. It has its own font engine and multiple-master
+substitution and never asks CoreText, which is presumably why Adobe built font
+activation *into* their applications rather than relying on the system. fontfetch
+cannot help inside Acrobat; use Adobe Fonts there.
+
+PowerPoint is the interesting success, and it shapes two design choices. It
+requests fonts as a bare family name with no style for theme fonts, so matching
+only PostScript names would reject the very file that satisfies the request. And
+opening any `.pptx` asks for Calibri, Aptos and Segoe UI, none of which will ever
+be on Google Fonts — hence the proprietary-family list, which declines those in
+about ten milliseconds with no network traffic and, importantly, without telling
+the user about fonts they can do nothing about.
+
 Run the regression suite with `./scripts/selftest.sh`, or
 `./scripts/selftest.sh --with-keynote` to include the full end-to-end (installs a
 font, authors a deck against it, removes the font, and checks fontfetch puts it
@@ -138,7 +163,14 @@ later, but its removal is the expected end of this tool's life. When that happen
 exactly as they did before — nothing breaks, the tool just stops helping.
 
 **Google Fonts only.** Commercial fonts will not resolve, correctly. If you have
-a licensed font, install it the normal way.
+a licensed font, install it the normal way. When a font can't be found, fontfetch
+explains why and offers somewhere to look — Adobe Fonts, MyFonts, Fontspring,
+WhatTheFont — or copies the name to your clipboard. Suppress that with
+`--no-dialog`.
+
+**Not every application asks.** Adobe Acrobat resolves fonts internally and never
+consults the system hook, so fontfetch is invisible to it. See the compatibility
+table above.
 
 **GitHub rate limit.** Directory listings use the unauthenticated GitHub API at 60
 requests/hour. Set `GITHUB_TOKEN` to raise it. Failed names are negatively cached

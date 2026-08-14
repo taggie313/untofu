@@ -1,30 +1,39 @@
 import Foundation
 
-/// Coalesces a burst of fetches into one transient notification.
+/// Announces successful fetches, coalescing a burst into one message.
 ///
-/// Deliberately posts via `osascript display notification` rather than
-/// UserNotifications: UNUserNotificationCenter requires a bundled, signed
-/// application, and becoming an app would put fontfetch in the Dock or the menu
-/// bar permanently. It should be invisible until the moment it has something to
-/// say, which is a handful of times in a machine's life.
-///
-/// The cost of that choice is identity: the banner is attributed to whichever
-/// bundle osascript posts under, not to fontfetch. That seemed the better trade
-/// against a permanent menu-bar resident.
+/// Defaults to a dialog that must be dismissed rather than a transient banner:
+/// the whole point of the message is that the document on screen is still
+/// showing a substitute and needs reopening, which is easy to miss if the
+/// notification quietly expires. `--banner` restores the transient style.
 final class Notifier {
+    enum Style {
+        /// A dialog with an OK button. Stays until acknowledged.
+        case dialog
+        /// A transient notification banner. Posted via `osascript display
+        /// notification`, so it is attributed to whichever bundle osascript runs
+        /// under rather than to fontfetch.
+        case banner
+    }
+
     /// A document with several missing fonts produces a burst of requests. Wait
     /// for things to go quiet, then send one summary rather than one per font.
     static let quietPeriod: TimeInterval = 3.0
 
+    private let style: Style
     private let queue = DispatchQueue(label: "net.elusive.fontfetch.notify")
     private var pending: [String] = []
+    private var apps = Set<String>()
     private var scheduled: DispatchWorkItem?
 
-    /// Records a fetched family. All state is confined to `queue`, so there are
-    /// no locks here.
-    func record(family: String) {
+    init(style: Style = .dialog) { self.style = style }
+
+    /// Records a fetched family and the app that asked for it. All state is
+    /// confined to `queue`, so there are no locks here.
+    func record(family: String, app: String?) {
         queue.async {
             if !self.pending.contains(family) { self.pending.append(family) }
+            if let app { self.apps.insert(app) }
             self.scheduled?.cancel()
             let work = DispatchWorkItem { [weak self] in self?.flush() }
             self.scheduled = work
@@ -35,19 +44,35 @@ final class Notifier {
     private func flush() {
         guard !pending.isEmpty else { return }
         let families = pending
+        let requesters = apps
         pending = []
+        apps = []
 
         let count = families.count
-        let subtitle = count == 1 ? "Fetched a missing font" : "Fetched \(count) missing fonts"
+        let headline = count == 1 ? "Fetched a missing font" : "Fetched \(count) missing fonts"
+        Log.info("notified: \(headline) — \(families.joined(separator: ", "))")
+
         // The document that triggered this already rendered with a substitute —
         // the fetch is asynchronous by design — so the reopen hint is the most
-        // useful thing the banner can say.
-        let body = "\(list(families)) — reopen the document to see \(count == 1 ? "it" : "them")."
-        Log.info("notified: \(subtitle) — \(list(families))")
-        Notifier.post(title: "fontfetch", subtitle: subtitle, body: body)
+        // useful thing the message can carry.
+        let where_ = requesters.count == 1 ? " in \(requesters.first!)" : ""
+        let reopen = "Reopen your document\(where_) to see \(count == 1 ? "it" : "them")."
+
+        switch style {
+        case .banner:
+            Notifier.post(title: "fontfetch", subtitle: headline,
+                          body: "\(sentence(families)) — \(reopen)")
+        case .dialog:
+            let body = "\(headline)\n\n" + families.map { "  •  \($0)" }.joined(separator: "\n")
+                     + "\n\n\(reopen)"
+            Shell.osascript("""
+            display dialog "\(Shell.escape(body))" with title "fontfetch" \
+            buttons {"OK"} default button "OK" with icon note
+            """)
+        }
     }
 
-    private func list(_ families: [String]) -> String {
+    private func sentence(_ families: [String]) -> String {
         switch families.count {
         case 1: return families[0]
         case 2: return "\(families[0]) and \(families[1])"
@@ -57,23 +82,19 @@ final class Notifier {
     }
 
     static func post(title: String, subtitle: String, body: String) {
-        let script = "display notification \"\(escape(body))\" "
-                   + "with title \"\(escape(title))\" subtitle \"\(escape(subtitle))\""
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", script]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do { try process.run() } catch {
-            Log.debug("could not post notification: \(error.localizedDescription)")
-        }
+        Shell.osascript("""
+        display notification "\(Shell.escape(body))" with title "\(Shell.escape(title))" \
+        subtitle "\(Shell.escape(subtitle))"
+        """)
     }
 
-    /// Font family names are attacker-influenced only to the degree that a
-    /// document author picks them, but they still land inside an AppleScript
-    /// string literal, so quote and backslash have to go.
-    private static func escape(_ value: String) -> String {
-        value.replacingOccurrences(of: "\\", with: "\\\\")
-             .replacingOccurrences(of: "\"", with: "\\\"")
+    /// Best-effort friendly name for the process that asked for the font.
+    /// Deliberately called from the background queue — it spawns `ps`, which has
+    /// no business anywhere near the provider callback.
+    static func appName(for pid: pid_t) -> String? {
+        let result = Shell.run("/bin/ps", ["-p", "\(pid)", "-o", "comm="])
+        guard result.status == 0, !result.output.isEmpty else { return nil }
+        let name = URL(fileURLWithPath: result.output).lastPathComponent
+        return name.isEmpty ? nil : name
     }
 }

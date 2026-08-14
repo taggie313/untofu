@@ -9,17 +9,37 @@ enum Fetcher {
     /// in the first file or two.
     static let maxDownloadsPerAttempt = 8
 
-    /// `notify` is called with a human-readable family name on success. The CLI
-    /// leaves it nil — it already prints what happened, and a banner announcing
-    /// something the user just typed is noise.
+    /// Reports the outcome of a fetch. The CLI leaves this nil — it already
+    /// prints what happened, and a banner announcing something the user just
+    /// typed is noise.
+    struct Observer {
+        /// Human-readable family name, e.g. "Playfair Display".
+        var resolved: ((String) -> Void)?
+        /// The raw PostScript name, which is what the user needs to search for.
+        var unresolved: ((String) -> Void)?
+    }
+
     @discardableResult
     static func fetch(psName: String, into cache: Cache,
-                      notify: ((String) -> Void)? = nil) -> Bool {
+                      observer: Observer? = nil) -> Bool {
         let candidates = Resolver.familyCandidates(for: psName)
         guard !candidates.isEmpty else { return false }
+
+        // Skip families we know we can never supply. Nothing is fetched and,
+        // crucially, the user is not told — a dialog listing Calibri and Segoe UI
+        // every time a .pptx opens is noise they can do nothing about.
+        if Resolver.isKnownProprietary(psName) {
+            Log.debug("skipping \(psName): proprietary family, never on Google Fonts")
+            cache.markUnresolved(psName)
+            return false
+        }
         Log.debug("resolving \(psName) via candidates: \(candidates.joined(separator: ", "))")
 
-        let scratch = cache.fontsDir.appendingPathComponent(".incoming", isDirectory: true)
+        // Per-fetch scratch directory. A shared one is a race: fetches run
+        // concurrently, and the first to finish would delete the staging area out
+        // from under the others on its way out.
+        let scratch = cache.fontsDir
+            .appendingPathComponent(".incoming-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
 
@@ -46,7 +66,7 @@ enum Fetcher {
                     cache.record(installed)
                     Log.info("fetched \(psName) <- \(license)/\(slug)/\(file.name) "
                            + "(\(installed.postScriptNames.count) face(s) indexed)")
-                    notify?(Resolver.displayFamily(for: psName))
+                    observer?.resolved?(Resolver.displayFamily(for: psName))
                     return true
                 }
             }
@@ -54,6 +74,7 @@ enum Fetcher {
 
         Log.info("unresolved \(psName) — no Google Fonts family answers to it")
         cache.markUnresolved(psName)
+        observer?.unresolved?(psName)
         return false
     }
 

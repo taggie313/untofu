@@ -57,6 +57,17 @@ struct FontFile {
         if let fvarOffset = fvarTable {
             result.formUnion(instanceNames(r, at: fvarOffset, names: records))
         }
+
+        // Family names too, spaced and squashed. Applications do not always ask
+        // by PostScript name: PowerPoint requests a bare "Roboto" for a theme
+        // font with no style, and matching only PostScript names rejects the very
+        // file that satisfies it. Matching stays exact, so this cannot pull in an
+        // unrelated family.
+        for nameID in [16, 1] {                              // typographic, then legacy
+            guard let family = records[UInt16(nameID)], !family.isEmpty else { continue }
+            result.insert(family)
+            result.insert(squashed(family))
+        }
         return result
     }
 

@@ -49,11 +49,35 @@ check "$($BIN list | grep -c '  raleway-regular')"    "1" "also indexes the synt
 $BIN fetch Lora-Bold >/dev/null 2>&1
 check "$($BIN list | grep -c 'lora-bold')" "1" "resolves a weight whose font omits instance PostScript names"
 
+# PowerPoint asks for theme fonts as a bare family with no style. Matching only
+# PostScript names rejects the very file that satisfies the request.
+$BIN fetch Roboto >/dev/null 2>&1
+check "$($BIN list | grep -cE '^  roboto  ->')" "1" "resolves a bare family name with no style"
+
 if $BIN fetch ZZNotARealFont-Regular >/dev/null 2>&1; then
   bad "declines a name that does not exist"
 else
   ok "declines a name that does not exist"
 fi
+
+# Opening any Office document asks for these. They must cost nothing and stay
+# silent rather than nagging about fonts the user cannot obtain.
+if $BIN fetch Calibri-Bold >/dev/null 2>&1; then
+  bad "declines a known proprietary family"
+else
+  ok "declines a known proprietary family"
+fi
+check "$($BIN list | grep -c 'calibri')" "0" "proprietary family is never cached"
+
+echo
+echo "== concurrency =="
+rm -rf "$CACHE"
+# Each fetch stages downloads in its own scratch directory. A shared one is a
+# race: the first to finish deletes the staging area out from under the others.
+for f in Karla-Regular Rubik-Regular Lora-Regular; do $BIN fetch "$f" >/dev/null 2>&1 & done
+wait
+check "$($BIN list | grep -cE '^  (karla|rubik|lora)-regular  ->')" "3" "three concurrent fetches all land"
+check "$(ls -a "$CACHE/fonts" | grep -c incoming)" "0" "no scratch directories left behind"
 
 echo
 echo "== index hygiene =="
@@ -93,7 +117,9 @@ APPLESCRIPT
   rm -f ~/Library/Fonts/Lora.ttf
   sleep 3
 
-  $BIN run > "$SCRATCH/daemon.log" 2>&1 &
+  # --quiet: the success dialog waits for a click, which would sit on screen
+  # fighting the AppleScript driving Keynote.
+  $BIN run --quiet -v > "$SCRATCH/daemon.log" 2>&1 &
   DAEMON=$!
   trap 'kill $DAEMON 2>/dev/null; rm -rf "$SCRATCH"' EXIT
   sleep 2
@@ -105,9 +131,21 @@ APPLESCRIPT
             -e 'tell application "Keynote" to quit' >/dev/null 2>&1
   sleep 3
 
-  open -a Keynote "$SCRATCH/LoraTest.key"; sleep 12
-  GOT=$(osascript -e 'tell application "Keynote" to get font of object text of text item 4 of current slide of document 1' 2>&1)
+  # Poll rather than guess: a cold Keynote start after a full quit can take
+  # well over ten seconds, and a fixed sleep makes this test flap.
+  open -a Keynote "$SCRATCH/LoraTest.key"
+  GOT=""
+  for _ in $(seq 1 20); do
+    sleep 2
+    GOT=$(osascript -e 'tell application "Keynote" to get font of object text of text item 4 of current slide of document 1' 2>/dev/null)
+    [ -n "$GOT" ] && break
+  done
+  [ -z "$GOT" ] && GOT="(Keynote never opened the document)"
   check "$GOT" "Lora-Regular" "Keynote renders a font installed nowhere on the system"
+  if [ "$GOT" != "Lora-Regular" ]; then
+    echo "        --- daemon log ---"
+    sed 's/^/        /' "$SCRATCH/daemon.log"
+  fi
 
   osascript -e 'tell application "Keynote" to close document 1 saving no' \
             -e 'tell application "Keynote" to quit' >/dev/null 2>&1

@@ -36,6 +36,45 @@ enum Resolver {
         family.lowercased().filter { $0.isLetter || $0.isNumber }
     }
 
+    /// Families that will never be on Google Fonts and are requested constantly.
+    ///
+    /// Opening any PowerPoint file asks for Calibri, Aptos and Segoe UI; opening a
+    /// PDF asks for the base-14 names. Without this, every Office document would
+    /// pop a "couldn't find 5 fonts" dialog listing fonts the user can do nothing
+    /// about, and burn three GitHub API calls per name confirming it.
+    ///
+    /// Matching is on the exact family slug, so Google families with overlapping
+    /// words are unaffected — `librebaskerville` does not match `baskerville`.
+    private static let proprietarySlugs: Set<String> = [
+        // Microsoft Office core and ClearType
+        "calibri", "cambria", "candara", "consolas", "constantia", "corbel",
+        "aptos", "segoeui", "segoe", "sitka", "bierstadt", "grandview",
+        "seaford", "skeena", "tenorite", "marlett", "msreferencesansserif",
+        // Classic Microsoft web-core
+        "arial", "arialblack", "arialnarrow", "timesnewroman", "couriernew",
+        "georgia", "verdana", "tahoma", "trebuchetms", "comicsansms", "impact",
+        "webdings", "wingdings", "wingdings2", "wingdings3", "symbol",
+        "msgothic", "msmincho", "simsun", "malgungothic",
+        // Apple system faces
+        "helvetica", "helveticaneue", "sfpro", "sfprotext", "sfprodisplay",
+        "sfmono", "sfnsdisplay", "sfnstext", "geneva", "monaco", "menlo",
+        "lucidagrande", "avenir", "avenirnext", "optima", "palatino",
+        "baskerville", "futura", "gillsans", "hoeflertext", "zapfino",
+        "chalkboard", "chalkboardse", "papyrus", "skia", "charter", "seravek",
+        "superclarendon", "americantypewriter", "markerfelt", "noteworthy",
+        "snellroundhand", "applesdgothicneo", "hiraginosans", "pingfangsc",
+        // PDF base-14 and common Adobe originals
+        "times", "courier", "zapfdingbats", "myriad", "myriadpro", "minion",
+        "minionpro", "adobegaramond", "trajan", "trajanpro", "warnock",
+        "chaparral", "cronos", "tekton", "birch", "blackoak", "poplar",
+    ]
+
+    /// True when the name belongs to a family we know we cannot fetch, so the
+    /// lookup can be skipped entirely and the user left unbothered.
+    static func isKnownProprietary(_ psName: String) -> Bool {
+        familyCandidates(for: psName).contains { proprietarySlugs.contains($0) }
+    }
+
     /// Human-readable family for notifications: `PlayfairDisplay-Bold` reads far
     /// better as "Playfair Display" than as its PostScript spelling.
     static func displayFamily(for psName: String) -> String {
