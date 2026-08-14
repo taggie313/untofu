@@ -21,11 +21,29 @@ enum LaunchAgent {
             .appendingPathComponent("Library/Logs/fontfetch.log")
     }
 
-    static var isLoaded: Bool {
+    /// Homebrew names formula services `homebrew.mxcl.<formula>`.
+    static let brewLabel = "homebrew.mxcl.fontfetch"
+
+    static var isLoaded: Bool { loaded(label) }
+    static var brewServiceLoaded: Bool { loaded(brewLabel) }
+
+    private static func loaded(_ label: String) -> Bool {
         run("/bin/launchctl", ["print", "gui/\(getuid())/\(label)"]).status == 0
     }
 
     static func install() throws {
+        // Two agents would race over one cache — concurrent providers competing
+        // to answer the same font request and clobbering each other's staging
+        // directories. Refuse rather than quietly create the second one.
+        guard !brewServiceLoaded else {
+            throw Failure("""
+            A Homebrew-managed service (\(brewLabel)) is already loaded.
+            Installing a second agent would have the two race over the same cache.
+            Use `brew services restart fontfetch` instead, or run
+            `brew services stop fontfetch` first if you want the standalone agent.
+            """)
+        }
+
         let binDir = installedBinary.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
         try? FileManager.default.removeItem(at: installedBinary)

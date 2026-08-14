@@ -36,7 +36,15 @@ func usage() -> Never {
     exit(positional.isEmpty ? 1 : 0)
 }
 
+if flags.contains("--version") {
+    print("fontfetch \(Build.version)")
+    exit(0)
+}
+
 switch positional.first ?? "" {
+
+case "version":
+    print("fontfetch \(Build.version)")
 
 case "run":
     let quiet = flags.contains("--quiet") || flags.contains("-q")
@@ -93,8 +101,14 @@ case "status":
     let probe = Provider(cache: cache)
     let hookAvailable = probe.start()
     probe.stop()
+    print("version:    \(Build.version)")
     print("hook:       \(hookAvailable ? "available" : "UNAVAILABLE (deprecated API removed)")")
     print("agent:      \(LaunchAgent.isLoaded ? "loaded" : "not loaded")")
+    print("brew svc:   \(LaunchAgent.brewServiceLoaded ? "loaded" : "not loaded")")
+    if LaunchAgent.isLoaded && LaunchAgent.brewServiceLoaded {
+        print("            ⚠︎ both are loaded — they will race over the same cache.")
+        print("              Stop one: `brew services stop fontfetch` or `fontfetch uninstall`.")
+    }
     print("cache:      \(cache.entries.count) face(s) in \(Cache.root.path)")
     print("unresolved: \(cache.unresolvedNames.count) name(s) in negative cache")
     if !hookAvailable { exit(3) }
