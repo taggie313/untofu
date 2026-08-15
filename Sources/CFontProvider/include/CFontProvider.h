@@ -35,4 +35,14 @@ void ff_provider_run(void);
 /// Invalidates and releases the runloop source.
 void ff_provider_stop(void);
 
+/// Absolute executable path of a process, written into `out`.
+///
+/// Backed by proc_pidpath, which is a syscall rather than a fork, so it is
+/// cheap enough to call from the request handler. Spawning `ps` there would
+/// stall the requesting application's text layout for milliseconds.
+///
+/// Returns true on success. Fails for processes that have exited or that this
+/// user may not inspect.
+bool ff_process_path(pid_t pid, char *out, size_t capacity);
+
 #endif /* CFONTPROVIDER_H */

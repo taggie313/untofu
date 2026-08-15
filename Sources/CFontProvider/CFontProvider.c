@@ -1,6 +1,7 @@
 #include "include/CFontProvider.h"
 
 #include <CoreText/CoreText.h>
+#include <libproc.h>
 #include <string.h>
 
 // CTFontManagerCreateFontRequestRunLoopSource is deprecated (macOS 10.6-11.0).
@@ -65,6 +66,18 @@ void ff_provider_stop(void) {
     CFRunLoopSourceInvalidate(gSource);
     CFRelease(gSource);
     gSource = NULL;
+}
+
+bool ff_process_path(pid_t pid, char *out, size_t capacity) {
+    if (out == NULL || capacity == 0) return false;
+    out[0] = '\0';
+    if (capacity < PROC_PIDPATHINFO_MAXSIZE) {
+        char buffer[PROC_PIDPATHINFO_MAXSIZE];
+        if (proc_pidpath(pid, buffer, sizeof buffer) <= 0) return false;
+        strlcpy(out, buffer, capacity);
+        return out[0] != '\0';
+    }
+    return proc_pidpath(pid, out, (uint32_t)capacity) > 0;
 }
 
 #pragma clang diagnostic pop

@@ -80,7 +80,43 @@ check "$($BIN list | grep -cE '^  (karla|rubik|lora)-regular  ->')" "3" "three c
 check "$(ls -a "$CACHE/fonts" | grep -c incoming)" "0" "no scratch directories left behind"
 
 echo
+echo "== browser policy =="
+check "$($BIN policy $$ | grep -c 'may fetch')" "1" "an ordinary process may fetch"
+
+CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+if [ -x "$CHROME" ]; then
+  # A throwaway profile, so this never touches the user's real Chrome or its
+  # tabs. A long-lived renderer caches its font lookups, so reusing the running
+  # instance silently tests nothing — the first attempt at this passed for that
+  # reason rather than because the policy worked.
+  BWORK=$(mktemp -d)
+  rm -rf "$CACHE" /tmp/ff-selftest-chrome
+  cat > "$BWORK/local.html" <<'HTML'
+<!doctype html><meta charset="utf-8">
+<style>@font-face{font-family:"T";src:local("Manrope")}body{font-family:"T",serif}</style>
+<p>local() lookup</p>
+HTML
+  $BIN run -q -v > "$BWORK/d.log" 2>&1 &
+  BD=$!
+  sleep 2
+  "$CHROME" --user-data-dir=/tmp/ff-selftest-chrome --no-first-run \
+            --no-default-browser-check "file://$BWORK/local.html" >/dev/null 2>&1 &
+  sleep 18
+  check "$(grep -c 'declined, Google Chrome' "$BWORK/d.log")" "1" "a Chromium local() lookup is declined"
+  check "$($BIN list | grep -ci manrope)" "0" "and the font is not downloaded"
+  pkill -f 'user-data-dir=/tmp/ff-selftest-chrome' 2>/dev/null
+  kill $BD 2>/dev/null; wait $BD 2>/dev/null
+  sleep 2   # Chrome holds its profile open briefly; rm -rf races it otherwise
+  rm -rf "$BWORK" /tmp/ff-selftest-chrome
+else
+  echo "  SKIP  Chrome not installed; browser policy untested"
+fi
+
+echo
 echo "== index hygiene =="
+# Self-contained: the browser section above leaves the cache empty by design,
+# so this has to put something in it rather than inherit from earlier tests.
+$BIN fetch Cardo-Regular >/dev/null 2>&1
 rm -f "$CACHE/fonts/"*.ttf
 check "$($BIN verify | grep -c 'dropped')" "1" "verify drops entries whose file vanished"
 

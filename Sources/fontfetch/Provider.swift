@@ -13,10 +13,15 @@ final class Provider {
     private let inFlightLock = NSLock()
     private var inFlight = Set<String>()
 
-    init(cache: Cache, notifier: Notifier? = nil, reporter: UnresolvedReporter? = nil) {
+    /// When false, a browser's cache misses are declined rather than fetched.
+    private let fetchForBrowsers: Bool
+
+    init(cache: Cache, notifier: Notifier? = nil, reporter: UnresolvedReporter? = nil,
+         fetchForBrowsers: Bool = false) {
         self.cache = cache
         self.notifier = notifier
         self.reporter = reporter
+        self.fetchForBrowsers = fetchForBrowsers
     }
 
     func start() -> Bool {
@@ -33,6 +38,16 @@ final class Provider {
             Log.info("hit  \(psName)  (pid \(pid))")
             return path
         }
+
+        // Policy is consulted only on a miss. A hit costs nothing, touches no
+        // network and leaks nothing, so it is served to everyone — browsers
+        // included, which makes pages render slightly better for free.
+        if !fetchForBrowsers, RequesterPolicy.forProcess(pid) == .serveFromCacheOnly {
+            Log.debug("miss \(psName) (pid \(pid)) — declined, "
+                    + "\(RequesterPolicy.displayName(pid) ?? "requester") is a browser")
+            return nil
+        }
+
         Log.info("miss \(psName)  (pid \(pid)) — resolving in background")
         enqueue(psName, pid: pid)
         return nil

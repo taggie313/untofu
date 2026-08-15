@@ -162,6 +162,43 @@ be on Google Fonts — hence the proprietary-family list, which declines those i
 about ten milliseconds with no network traffic and, importantly, without telling
 the user about fonts they can do nothing about.
 
+### Browsers get the cache read-only
+
+Browsers reach this hook too, and fetching for them is wrong. They are declined
+by default: a cache **hit** is still served, because that costs nothing and
+touches no network, but a **miss** never becomes a download and never opens a
+dialog. `--fetch-for-browsers` turns that off.
+
+The mechanism is narrower than it first appears, and worth stating precisely
+because the obvious guess is wrong. A plain `font-family` stack does *not* reach
+this hook — that is resolved by matching against already-enumerated families.
+What does reach it is:
+
+```css
+@font-face { font-family: "Product Sans"; src: local("Product Sans"), url(...); }
+```
+
+`local()` is an explicit by-name lookup, which is exactly what the hook
+intercepts. It is the standard trick for "use the installed copy if the visitor
+happens to have one, otherwise download it", so it is everywhere.
+
+Measured rather than assumed: **Chromium fires the hook for `local()`;
+Safari/WebKit does not.** A plain font stack fires it in neither. So on a
+Chromium browser, every site offering a `local()` fallback asks the system for
+that font by name — and the page renders perfectly well when the answer is no,
+because the `url()` source is sitting right there.
+
+Three reasons that matters:
+
+- It is traffic and downloads for pages that never needed them.
+- Unobtainable brand fonts pop a dialog at someone who is only browsing. Google
+  properties ask for `Product Sans`, which nobody can obtain.
+- Every unresolved name becomes a GitHub API call. Left unchecked, fontfetch
+  quietly leaks the shape of your browsing to a third party. This is the reason
+  the default is off rather than a matter of taste.
+
+`fontfetch policy <pid>` reports how any given process would be treated.
+
 Run the regression suite with `./scripts/selftest.sh`, or
 `./scripts/selftest.sh --with-keynote` to include the full end-to-end (installs a
 font, authors a deck against it, removes the font, and checks fontfetch puts it

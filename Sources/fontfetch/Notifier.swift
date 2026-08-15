@@ -89,12 +89,7 @@ final class Notifier {
     }
 
     /// Best-effort friendly name for the process that asked for the font.
-    /// Deliberately called from the background queue — it spawns `ps`, which has
-    /// no business anywhere near the provider callback.
     static func appName(for pid: pid_t) -> String? {
-        let result = Shell.run("/bin/ps", ["-p", "\(pid)", "-o", "comm="])
-        guard result.status == 0, !result.output.isEmpty else { return nil }
-        let name = URL(fileURLWithPath: result.output).lastPathComponent
-        return name.isEmpty ? nil : name
+        RequesterPolicy.displayName(pid)
     }
 }

@@ -229,6 +229,28 @@ substitution, and never consults macOS at all — which is presumably why Adobe
 built font activation into their applications rather than relying on the system.
 Inside Acrobat, use Adobe Fonts.</p>
 
+<h3>Browsers are deliberately left alone</h3>
+
+<p>Web pages reach the same hook, and fontfetch declines them. A font already in
+the cache is still handed over — that costs nothing — but a browser never
+triggers a download and never raises a dialog.</p>
+
+<p>The reason is a CSS rule of the form
+<code>src: local("Product&nbsp;Sans"), url(…)</code>, which sites use to say
+&ldquo;use the visitor's copy if they have one, otherwise download it&rdquo;.
+That <code>local()</code> is a by-name lookup, so on a Chromium browser every
+such site asks your Mac for a font by name — and the page renders perfectly
+without it, because the <code>url()</code> is right there.</p>
+
+<div class="panel warn">
+  <h3>This one is about privacy, not tidiness</h3>
+  <p>Every font a page asks for and fontfetch can't find would otherwise become
+  a request to GitHub. Fetching on behalf of a browser would quietly leak the
+  shape of your browsing to a third party, so it is off by default rather than
+  as a matter of preference. <code>--fetch-for-browsers</code> turns it on if
+  you want it.</p>
+</div>
+
 <h2>What it won't do</h2>
 
 <div class="panel warn">

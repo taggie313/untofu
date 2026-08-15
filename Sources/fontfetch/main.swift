@@ -19,6 +19,7 @@ func usage() -> Never {
       fontfetch fetch <PSName>     Resolve and cache one PostScript name now.
       fontfetch list               List cached faces.
       fontfetch verify             Drop index entries whose file has gone missing.
+      fontfetch policy <pid>       Show how a given process would be treated.
       fontfetch notify-test        Post a sample notification banner.
       fontfetch dialog-test        Show the "couldn't find it" dialog.
 
@@ -28,6 +29,11 @@ func usage() -> Never {
           --banner                 Announce successes as a transient banner
                                    instead of a dialog needing dismissal.
           --no-dialog              Suppress the "couldn't find it" dialog.
+          --fetch-for-browsers     Also fetch for browsers. Off by default: a CSS
+                                   font stack is a preference list the page is
+                                   built to fall through, so fetching for one is
+                                   noise, and every miss would put a font name a
+                                   web page chose into a request to GitHub.
 
     ENVIRONMENT
       GITHUB_TOKEN                 Raises the google/fonts listing rate limit above
@@ -52,7 +58,8 @@ case "run":
     let style: Notifier.Style = flags.contains("--banner") ? .banner : .dialog
     let provider = Provider(cache: cache,
                             notifier: quiet ? nil : Notifier(style: style),
-                            reporter: noDialog ? nil : UnresolvedReporter())
+                            reporter: noDialog ? nil : UnresolvedReporter(),
+                            fetchForBrowsers: flags.contains("--fetch-for-browsers"))
     guard provider.start() else {
         Log.warn("""
         CTFontManagerCreateFontRequestRunLoopSource is unavailable on this system.
@@ -111,6 +118,7 @@ case "status":
     }
     print("cache:      \(cache.entries.count) face(s) in \(Cache.root.path)")
     print("unresolved: \(cache.unresolvedNames.count) name(s) in negative cache")
+    print("browsers:   cache reads only, no fetching (--fetch-for-browsers to change)")
     if !hookAvailable { exit(3) }
 
 case "fetch":
@@ -135,6 +143,17 @@ case "list":
         for entry in entries { print("  \(entry.psName)  ->  \(entry.file)") }
         print("\(entries.count) face(s)")
     }
+
+case "policy":
+    guard positional.count > 1, let pid = pid_t(positional[1]) else {
+        FileHandle.standardError.write(Data("policy needs a pid, e.g. `fontfetch policy 74039`\n".utf8))
+        exit(1)
+    }
+    let path = RequesterPolicy.executablePath(pid) ?? "(cannot inspect this process)"
+    let decision = RequesterPolicy.forProcess(pid)
+    print("pid \(pid)")
+    print("  \(path)")
+    print("  \(decision == .serveFromCacheOnly ? "cache reads only — treated as a browser" : "may fetch")")
 
 case "verify":
     let dropped = cache.verify()
