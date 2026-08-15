@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# Publish site/ to the fontfetch CT.
+# Publish site/ to the fontfetch stack on the clickgraft CT.
 #
 #   ./site/deploy/redeploy.sh
 #
 # House pattern, same as elusive-web and clickgraft: everything goes *through*
 # the PVE host with `pct exec`. Never ssh into the container directly — the CTs
 # are not on a route from here and are not meant to be.
+#
+# This is a co-tenant of the clickgraft stack. It ships only into /opt/fontfetch
+# and never touches /opt/clickgraft, so a broken deploy here cannot take the
+# ClickGraft site down.
 #
 # Configure by copying deploy.env.example to deploy.env.
 set -euo pipefail
@@ -39,37 +43,47 @@ cp "$SITE"/index.html "$SITE"/icon.svg "$SITE"/favicon.ico \
 cp "$HERE/nginx.conf" "$HERE/docker-compose.yml" "$WORK/"
 tar -czf "$WORK/payload.tgz" -C "$WORK" html nginx.conf docker-compose.yml
 
+echo "==> validating nginx.conf before it can break anything"
+# Checked in a throwaway container first. A bad config otherwise leaves the
+# service down until someone notices.
+scp -q "$WORK/nginx.conf" "$PVE_HOST:/tmp/fontfetch-nginx.conf"
+ssh "$PVE_HOST" "pct push $CTID /tmp/fontfetch-nginx.conf /tmp/nginx.conf &&
+  pct exec $CTID -- docker run --rm -v /tmp/nginx.conf:/etc/nginx/nginx.conf:ro \
+    nginx:alpine nginx -t" >/dev/null 2>&1 \
+  || { echo "✗ nginx.conf is invalid; nothing was deployed" >&2; exit 1; }
+
 echo "==> shipping to CT $CTID via $PVE_HOST"
-# Through the host: land the tarball on the PVE node, push it into the CT, then
-# unpack inside. `pct push` avoids needing any network path to the container.
 scp -q "$WORK/payload.tgz" "$PVE_HOST:/tmp/fontfetch-payload.tgz"
 ssh "$PVE_HOST" "pct push $CTID /tmp/fontfetch-payload.tgz /tmp/payload.tgz &&
   pct exec $CTID -- sh -c '
-    mkdir -p $REMOTE_DIR &&
+    mkdir -p $REMOTE_DIR/html &&
+    rm -rf $REMOTE_DIR/html/* &&
     tar -xzf /tmp/payload.tgz -C $REMOTE_DIR &&
-    rm -f /tmp/payload.tgz
-  ' && rm -f /tmp/fontfetch-payload.tgz"
+    rm -f /tmp/payload.tgz /tmp/nginx.conf
+  ' && rm -f /tmp/fontfetch-payload.tgz /tmp/fontfetch-nginx.conf"
 
 echo "==> restarting compose"
-# .env holds only CLOUDFLARE_TUNNEL_TOKEN and lives on the CT at mode 600. It is
-# never shipped from here and never committed.
+# nginx.conf is a single-file bind mount and tar replaces the file rather than
+# writing through it, so the container keeps the old inode until it is recreated.
+# Same trap clickgraft documents. --force-recreate is the cheap fix.
 ssh "$PVE_HOST" "pct exec $CTID -- sh -c '
-  cd $REMOTE_DIR &&
-  test -f .env || { echo \"✗ $REMOTE_DIR/.env missing (needs CLOUDFLARE_TUNNEL_TOKEN)\" >&2; exit 1; }
-  docker compose up -d
+  cd $REMOTE_DIR && docker compose up -d --force-recreate
 '"
 
 echo "==> verifying origin"
-# From inside the CT, so this never counts as a visit in the access log —
-# requests without CF-Connecting-IP are excluded by nginx.conf.
 ssh "$PVE_HOST" "pct exec $CTID -- sh -c '
-  docker compose -f $REMOTE_DIR/docker-compose.yml exec -T web \
-    wget -qO- http://127.0.0.1/ | head -c 200
+  docker exec fontfetch-web-1 wget -qO- http://127.0.0.1/ | head -c 400
 '" | grep -q "fontfetch" && echo "   origin serving ✓"
+
+echo "==> confirming clickgraft is undisturbed"
+ssh "$PVE_HOST" "pct exec $CTID -- sh -c '
+  docker exec clickgraft-web-1 wget -qO- http://127.0.0.1/ | head -c 400
+'" | grep -q "ClickGraft" && echo "   clickgraft still serving ✓"
 
 echo "==> public URL"
 if curl -sSf -o /dev/null -w "   %{http_code} %{url_effective}\n" "$PUBLIC_URL"; then
   echo "✓ deployed"
 else
-  echo "   public URL not answering yet — check the tunnel's Public Hostname mapping" >&2
+  echo "   public URL not answering — add a Public Hostname on the existing tunnel:" >&2
+  echo "     $PUBLIC_URL  ->  http://fontfetch-web:80" >&2
 fi

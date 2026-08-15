@@ -1,5 +1,12 @@
 name: fontfetch
 
+# Co-tenant of the clickgraft stack on CT 117: its own compose project, its own
+# nginx, sharing that stack's cloudflared rather than running a second tunnel.
+#
+# Deliberately NOT a service added to /opt/clickgraft/docker-compose.yml. That
+# file is rsync --delete'd and re-tarred by clickgraft's own redeploy.sh, so
+# anything added to it disappears the next time ClickGraft ships.
+
 services:
   web:
     image: nginx:alpine
@@ -8,17 +15,24 @@ services:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./html:/usr/share/nginx/html:ro
       - logs:/var/log/nginx
-    # No published ports. The only way in is the tunnel, so nothing is exposed
-    # even if the CT ends up with a routable address.
+    networks:
+      shared:
+        # The name the tunnel's Public Hostname points at.
+        aliases:
+          - fontfetch-web
+    # No published ports, and no cloudflared of our own. The only way in is the
+    # existing tunnel, which reaches this container over the shared network.
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
-    depends_on:
-      - web
+networks:
+  # Created by the clickgraft compose project in this same container. Joining it
+  # is what lets the running cloudflared resolve `fontfetch-web`.
+  #
+  # Coupling to be aware of: a `docker compose down` in /opt/clickgraft removes
+  # this network, and this container then has to be restarted once the clickgraft
+  # stack is back up. `docker compose up -d` there recreates it.
+  shared:
+    external: true
+    name: clickgraft_default
 
 volumes:
   logs:

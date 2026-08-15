@@ -1,77 +1,86 @@
 # Deploying fontfetch.elusive.net
 
-Static page, nginx origin, cloudflared tunnel. Same shape as `elusive-web` and
-`clickgraft`: no published ports, the tunnel is the only ingress, and every
-deploy goes *through* the PVE host with `pct exec` rather than into the
-container directly.
+Static page served by its own nginx, running as a **co-tenant of the clickgraft
+stack** on CT 117 (`bb2`). It shares that stack's cloudflared rather than running
+a second tunnel.
 
-## Not yet live
+## Shape
 
-This scaffolding is complete but the site has never been deployed, because two
-steps are not mine to take:
-
-1. **A Cloudflare tunnel** for `fontfetch.elusive.net`, and its token. Tunnels
-   are created in the Cloudflare dashboard; the token then lives only in
-   `/opt/fontfetch/.env` on the container at mode 600, and is never committed.
-2. **The Public Hostname mapping** `fontfetch.elusive.net` → `http://web:80`
-   on that tunnel.
-
-Once those exist, provisioning the container and running the deploy is
-mechanical.
-
-## One-time setup
-
-Provision a Debian container on a PVE node, install Docker, then:
-
-```sh
-# On the PVE host
-pct exec <CTID> -- sh -c 'mkdir -p /opt/fontfetch'
-pct exec <CTID> -- sh -c 'printf "CLOUDFLARE_TUNNEL_TOKEN=%s\n" "<token>" > /opt/fontfetch/.env'
-pct exec <CTID> -- sh -c 'chmod 600 /opt/fontfetch/.env'
+```
+CT 117 ─┬─ /opt/clickgraft   compose project "clickgraft"
+        │     web, cloudflared, report, stats
+        │
+        └─ /opt/fontfetch    compose project "fontfetch"
+              web  ──► joins network clickgraft_default as "fontfetch-web"
 ```
 
-Then from a checkout:
+The tunnel is **token-managed**, so its ingress rules live in the Cloudflare
+dashboard and are pushed to cloudflared, which hot-reloads them. Adding a site is
+one dashboard entry and needs no restart and no token handling:
+
+```
+fontfetch.elusive.net  ->  http://fontfetch-web:80
+```
+
+## Why a separate compose project
+
+Not a service bolted onto `/opt/clickgraft/docker-compose.yml`. ClickGraft's own
+`redeploy.sh` stages its compose file and `nginx.conf`, `rsync --delete`s the
+staging directory and re-tars it into the container — so anything added to that
+file is erased the next time ClickGraft ships. A separate project in its own
+directory is immune to that, and a broken deploy here cannot take ClickGraft
+down.
+
+`redeploy.sh` checks both sites after every deploy for exactly that reason.
+
+## One coupling to know about
+
+`networks.shared` is `external: true` pointing at `clickgraft_default`, which the
+clickgraft project owns. A `docker compose down` in `/opt/clickgraft` removes
+that network; bring the clickgraft stack back up and then restart this one:
 
 ```sh
-cp site/deploy/deploy.env.example site/deploy/deploy.env
-$EDITOR site/deploy/deploy.env      # PVE_HOST and CTID
-./site/deploy/redeploy.sh
+pct exec 117 -- sh -c 'cd /opt/fontfetch && docker compose up -d'
 ```
 
 ## Deploying
 
 ```sh
+cp site/deploy/deploy.env.example site/deploy/deploy.env   # already points at CT 117
 ./site/deploy/redeploy.sh
 ```
 
-It rebuilds the icon set from `icon.svg`, ships `index.html` plus the artwork,
-restarts compose, checks the origin from inside the container, and finally
-checks the public URL.
+It rebuilds the icon set, validates `nginx.conf` in a throwaway container before
+anything is replaced, ships the payload through the PVE host with `pct exec`,
+recreates the container, then checks that fontfetch serves, that **clickgraft
+still serves**, and finally that the public URL answers.
 
 ## Two things that will bite again
 
-Both are inherited from `clickgraft` and both are already handled in
-`nginx.conf`, but they are easy to reintroduce:
+Both inherited from clickgraft, both already handled:
 
 - The `nginx:alpine` image ships `/var/log/nginx/access.log` as a symlink to
   `/dev/stdout`, and a volume mounted over that directory inherits the symlink.
   Logging to that name writes to the container's stdout and leaves the file on
   disk permanently empty. Hence `fontfetch-access.log`.
-- `$server_protocol` already contains `HTTP/`. Prefixing it again produces
-  `HTTP/HTTP/1.1` in the log format.
+- `nginx.conf` is a single-file bind mount and `tar` replaces the file rather
+  than writing through it, so the container keeps the old inode. Hence
+  `--force-recreate` rather than a plain `up -d`.
+
+Also: `$server_protocol` already contains `HTTP/`.
 
 ## Logging
 
 Addresses are truncated before they are written — IPv4 to its /24, IPv6 to its
-/48 — which is enough to tell two visitors apart on a day and not enough to
-point at a person. Requests without `CF-Connecting-IP` never came through the
-tunnel, so they are ours and are not logged at all.
+/48 — enough to tell two visitors apart on a day, not enough to point at a
+person. Requests without `CF-Connecting-IP` never came through the tunnel, so
+they are ours and are not logged.
 
-No GoAccess service here, unlike clickgraft. Add one if the traffic ever
-justifies it; the log format is already compatible.
+No GoAccess service here, unlike clickgraft. Add one if traffic ever justifies
+it; the log format is already compatible.
 
 ## HSTS
 
 Host-only, `max-age` with no `includeSubDomains` and no `preload`, forever.
-Unaffiliated third-party subdomains live under `elusive.net`, and preloading the
-apex would break them. Same firm constraint as the brand site.
+Unaffiliated third-party subdomains live under `elusive.net`. Same firm
+constraint as the brand site.

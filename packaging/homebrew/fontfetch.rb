@@ -1,8 +1,8 @@
 class Fontfetch < Formula
   desc "Supplies missing fonts to any macOS app, on demand"
   homepage "https://fontfetch.elusive.net"
-  url "https://github.com/taggie313/fontfetch/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "6e8c8546642f0731d9bd23183de356a10d719c4465b2df35c0ebd606a5a6111d"
+  url "https://github.com/taggie313/fontfetch/archive/refs/tags/v0.1.1.tar.gz"
+  sha256 "aa2c8b7727155a3ebb307bbb6b0f0d922c6b5bbcdf03f91fe3bdc83b50efebdc"
   license "MIT"
   head "https://github.com/taggie313/fontfetch.git", branch: "main"
 
