@@ -2,7 +2,7 @@ import CFontProvider
 import Darwin
 import Foundation
 
-/// What a given process is allowed to make fontfetch do.
+/// What a given process is allowed to make untofu do.
 ///
 /// Browsers are the reason this exists, and the mechanism is narrower than it
 /// first looks. A plain `font-family` stack does *not* reach this hook: that is

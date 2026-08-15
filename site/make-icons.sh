@@ -6,7 +6,7 @@
 # One SVG is the source of truth so the favicon, the touch icon and the social
 # card cannot drift apart.
 #
-# No .icns here, unlike ClickGraft: fontfetch is a background agent with nothing
+# No .icns here, unlike ClickGraft: untofu is a background agent with nothing
 # a user ever launches, so there is no app icon to build. The set is web-only.
 #
 # Rendered with qlmanage rather than ImageMagick. IM's bundled SVG renderer

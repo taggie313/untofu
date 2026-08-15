@@ -3,7 +3,7 @@ import Foundation
 /// Tells the user when a font could not be found, and offers somewhere to look.
 ///
 /// A silent failure is the one case where the user genuinely needs information:
-/// the document has already substituted something, fontfetch cannot help, and
+/// the document has already substituted something, untofu cannot help, and
 /// nothing on screen explains why. So this is the one place the tool is allowed
 /// to interrupt.
 ///
@@ -15,7 +15,7 @@ final class UnresolvedReporter {
     /// candidate lookups, so misses trickle in more slowly than hits.
     static let quietPeriod: TimeInterval = 4.0
 
-    private let queue = DispatchQueue(label: "net.elusive.fontfetch.unresolved")
+    private let queue = DispatchQueue(label: "net.elusive.untofu.unresolved")
     private var pending: [String] = []
     private var scheduled: DispatchWorkItem?
 
@@ -75,7 +75,7 @@ final class UnresolvedReporter {
 
         \(list)
 
-        fontfetch searched the Google Fonts catalogue and found nothing that \
+        untofu searched the Google Fonts catalogue and found nothing that \
         answers to \(names.count == 1 ? "that name" : "those names"). That \
         usually means \(names.count == 1 ? "it's a commercial or private font" : "they're commercial or private fonts") \
         rather than an openly-licensed one.
@@ -96,7 +96,7 @@ final class UnresolvedReporter {
 
         let script = """
         set chosen to choose from list {\(options)} \
-        with title "fontfetch" with prompt "\(Shell.escape(explanation))" \
+        with title "untofu" with prompt "\(Shell.escape(explanation))" \
         OK button name "Open" cancel button name "Dismiss"
         if chosen is false then
         return "@@dismissed@@"

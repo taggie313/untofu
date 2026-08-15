@@ -1,4 +1,4 @@
-# Deploying fontfetch.elusive.net
+# Deploying untofu.elusive.net
 
 Static page served by its own nginx, running as a **co-tenant of the clickgraft
 stack** on CT 117 (`bb2`). It shares that stack's cloudflared rather than running
@@ -10,8 +10,8 @@ a second tunnel.
 CT 117 ─┬─ /opt/clickgraft   compose project "clickgraft"
         │     web, cloudflared, report, stats
         │
-        └─ /opt/fontfetch    compose project "fontfetch"
-              web  ──► joins network clickgraft_default as "fontfetch-web"
+        └─ /opt/untofu    compose project "untofu"
+              web  ──► joins network clickgraft_default as "untofu-web"
 ```
 
 The tunnel is **token-managed**, so its ingress rules live in the Cloudflare
@@ -19,7 +19,7 @@ dashboard and are pushed to cloudflared, which hot-reloads them. Adding a site i
 one dashboard entry and needs no restart and no token handling:
 
 ```
-fontfetch.elusive.net  ->  http://fontfetch-web:80
+untofu.elusive.net  ->  http://untofu-web:80
 ```
 
 ## Why a separate compose project
@@ -40,7 +40,7 @@ clickgraft project owns. A `docker compose down` in `/opt/clickgraft` removes
 that network; bring the clickgraft stack back up and then restart this one:
 
 ```sh
-pct exec 117 -- sh -c 'cd /opt/fontfetch && docker compose up -d'
+pct exec 117 -- sh -c 'cd /opt/untofu && docker compose up -d'
 ```
 
 ## Deploying
@@ -52,7 +52,7 @@ cp site/deploy/deploy.env.example site/deploy/deploy.env   # already points at C
 
 It rebuilds the icon set, validates `nginx.conf` in a throwaway container before
 anything is replaced, ships the payload through the PVE host with `pct exec`,
-recreates the container, then checks that fontfetch serves, that **clickgraft
+recreates the container, then checks that untofu serves, that **clickgraft
 still serves**, and finally that the public URL answers.
 
 ## Two things that will bite again
@@ -62,7 +62,7 @@ Both inherited from clickgraft, both already handled:
 - The `nginx:alpine` image ships `/var/log/nginx/access.log` as a symlink to
   `/dev/stdout`, and a volume mounted over that directory inherits the symlink.
   Logging to that name writes to the container's stdout and leaves the file on
-  disk permanently empty. Hence `fontfetch-access.log`.
+  disk permanently empty. Hence `untofu-access.log`.
 - `nginx.conf` is a single-file bind mount and `tar` replaces the file rather
   than writing through it, so the container keeps the old inode. Hence
   `--force-recreate` rather than a plain `up -d`.

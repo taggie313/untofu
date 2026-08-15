@@ -75,7 +75,7 @@ enum GoogleFonts {
 
     private static func get(_ url: URL) -> Response {
         var request = URLRequest(url: url, timeoutInterval: 30)
-        request.setValue("fontfetch (+https://github.com/taggie313/fontfetch)",
+        request.setValue("untofu (+https://github.com/taggie313/untofu)",
                          forHTTPHeaderField: "User-Agent")
         if let token = ProcessInfo.processInfo.environment["GITHUB_TOKEN"], !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")

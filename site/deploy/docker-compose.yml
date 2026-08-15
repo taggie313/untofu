@@ -1,4 +1,4 @@
-name: fontfetch
+name: untofu
 
 # Co-tenant of the clickgraft stack on CT 117: its own compose project, its own
 # nginx, sharing that stack's cloudflared rather than running a second tunnel.
@@ -19,13 +19,13 @@ services:
       shared:
         # The name the tunnel's Public Hostname points at.
         aliases:
-          - fontfetch-web
+          - untofu-web
     # No published ports, and no cloudflared of our own. The only way in is the
     # existing tunnel, which reaches this container over the shared network.
 
 networks:
   # Created by the clickgraft compose project in this same container. Joining it
-  # is what lets the running cloudflared resolve `fontfetch-web`.
+  # is what lets the running cloudflared resolve `untofu-web`.
   #
   # Coupling to be aware of: a `docker compose down` in /opt/clickgraft removes
   # this network, and this container then has to be restarted once the clickgraft

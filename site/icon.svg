@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <!--
-    fontfetch's mark. A "tofu" box — the empty rectangle every renderer shows
+    untofu's mark. A "tofu" box — the empty rectangle every renderer shows
     when it has no glyph — with a real letterform standing in it and breaking
     past its edges. That is the whole tool in one image: the placeholder is
     what you had, the letter is what arrives.

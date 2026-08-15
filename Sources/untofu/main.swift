@@ -9,19 +9,19 @@ let cache = Cache()
 
 func usage() -> Never {
     print("""
-    fontfetch — supplies missing fonts to any macOS app, on demand.
+    untofu — supplies missing fonts to any macOS app, on demand.
 
     USAGE
-      fontfetch run                Run the provider in the foreground (launchd uses this).
-      fontfetch install            Install and start the login agent.
-      fontfetch uninstall          Stop and remove the login agent.
-      fontfetch status             Show hook availability, agent state, cache size.
-      fontfetch fetch <PSName>     Resolve and cache one PostScript name now.
-      fontfetch list               List cached faces.
-      fontfetch verify             Drop index entries whose file has gone missing.
-      fontfetch policy <pid>       Show how a given process would be treated.
-      fontfetch notify-test        Post a sample notification banner.
-      fontfetch dialog-test        Show the "couldn't find it" dialog.
+      untofu run                Run the provider in the foreground (launchd uses this).
+      untofu install            Install and start the login agent.
+      untofu uninstall          Stop and remove the login agent.
+      untofu status             Show hook availability, agent state, cache size.
+      untofu fetch <PSName>     Resolve and cache one PostScript name now.
+      untofu list               List cached faces.
+      untofu verify             Drop index entries whose file has gone missing.
+      untofu policy <pid>       Show how a given process would be treated.
+      untofu notify-test        Post a sample notification banner.
+      untofu dialog-test        Show the "couldn't find it" dialog.
 
     OPTIONS
       -v, --verbose                Log resolution steps.
@@ -43,14 +43,14 @@ func usage() -> Never {
 }
 
 if flags.contains("--version") {
-    print("fontfetch \(Build.version)")
+    print("untofu \(Build.version)")
     exit(0)
 }
 
 switch positional.first ?? "" {
 
 case "version":
-    print("fontfetch \(Build.version)")
+    print("untofu \(Build.version)")
 
 case "run":
     let quiet = flags.contains("--quiet") || flags.contains("-q")
@@ -67,7 +67,7 @@ case "run":
         This API has been deprecated since macOS 11 and annotated "will be removed
         in a future release". Its removal is the expected end of this tool's life,
         not a bug in it. Missing fonts will now behave exactly as they did before
-        fontfetch was installed. Run `fontfetch uninstall` to remove the agent.
+        untofu was installed. Run `untofu uninstall` to remove the agent.
         """)
         exit(3)
     }
@@ -85,7 +85,7 @@ case "run":
     }
     hangup.resume()
 
-    Log.info("fontfetch running — \(cache.entries.count) face(s) cached")
+    Log.info("untofu running — \(cache.entries.count) face(s) cached")
     provider.run()
 
 case "install":
@@ -114,7 +114,7 @@ case "status":
     print("brew svc:   \(LaunchAgent.brewServiceLoaded ? "loaded" : "not loaded")")
     if LaunchAgent.isLoaded && LaunchAgent.brewServiceLoaded {
         print("            ⚠︎ both are loaded — they will race over the same cache.")
-        print("              Stop one: `brew services stop fontfetch` or `fontfetch uninstall`.")
+        print("              Stop one: `brew services stop untofu` or `untofu uninstall`.")
     }
     print("cache:      \(cache.entries.count) face(s) in \(Cache.root.path)")
     print("unresolved: \(cache.unresolvedNames.count) name(s) in negative cache")
@@ -146,7 +146,7 @@ case "list":
 
 case "policy":
     guard positional.count > 1, let pid = pid_t(positional[1]) else {
-        FileHandle.standardError.write(Data("policy needs a pid, e.g. `fontfetch policy 74039`\n".utf8))
+        FileHandle.standardError.write(Data("policy needs a pid, e.g. `untofu policy 74039`\n".utf8))
         exit(1)
     }
     let path = RequesterPolicy.executablePath(pid) ?? "(cannot inspect this process)"
@@ -160,7 +160,7 @@ case "verify":
     print(dropped == 0 ? "index is clean" : "dropped \(dropped) stale entr\(dropped == 1 ? "y" : "ies")")
 
 case "notify-test":
-    Notifier.post(title: "fontfetch",
+    Notifier.post(title: "untofu",
                   subtitle: "Fetched 3 missing fonts",
                   body: "Raleway, Lora, and Playfair Display — reopen the document to see them.")
     print("Posted a sample banner. If nothing appeared, check System Settings > "

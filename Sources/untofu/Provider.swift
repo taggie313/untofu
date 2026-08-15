@@ -9,7 +9,7 @@ final class Provider {
     private let cache: Cache
     private let notifier: Notifier?
     private let reporter: UnresolvedReporter?
-    private let queue = DispatchQueue(label: "net.elusive.fontfetch.resolve", qos: .utility)
+    private let queue = DispatchQueue(label: "net.elusive.untofu.resolve", qos: .utility)
     private let inFlightLock = NSLock()
     private var inFlight = Set<String>()
 

@@ -8,7 +8,7 @@ import Foundation
 /// no stat, no parse, no I/O of any kind.
 final class Cache {
     static let root = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/fontfetch", isDirectory: true)
+        .appendingPathComponent("Library/Application Support/untofu", isDirectory: true)
 
     /// How long to wait before retrying a name that could not be resolved. Stops
     /// a document full of unavailable corporate fonts from hammering the network
@@ -106,7 +106,7 @@ final class Cache {
     // MARK: - Persistence
 
     /// Re-reads both maps from disk. The daemon calls this on SIGHUP so a
-    /// `fontfetch fetch` run in another process is picked up without a restart.
+    /// `untofu fetch` run in another process is picked up without a restart.
     func reload() {
         var freshIndex: [String: String] = [:]
         var freshNegative: [String: Date] = [:]
@@ -126,7 +126,7 @@ final class Cache {
 
     /// Read-modify-write under a cross-process lock.
     ///
-    /// More than one process touches these files: a `fontfetch fetch` run beside
+    /// More than one process touches these files: a `untofu fetch` run beside
     /// the login agent, or several concurrent fetches. Each holds its own
     /// in-memory view, so a blind overwrite silently drops whatever the others
     /// added — last writer wins and the rest of the work evaporates.

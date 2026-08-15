@@ -12,7 +12,7 @@ final class Notifier {
         case dialog
         /// A transient notification banner. Posted via `osascript display
         /// notification`, so it is attributed to whichever bundle osascript runs
-        /// under rather than to fontfetch.
+        /// under rather than to untofu.
         case banner
     }
 
@@ -21,7 +21,7 @@ final class Notifier {
     static let quietPeriod: TimeInterval = 3.0
 
     private let style: Style
-    private let queue = DispatchQueue(label: "net.elusive.fontfetch.notify")
+    private let queue = DispatchQueue(label: "net.elusive.untofu.notify")
     private var pending: [String] = []
     private var apps = Set<String>()
     private var scheduled: DispatchWorkItem?
@@ -60,13 +60,13 @@ final class Notifier {
 
         switch style {
         case .banner:
-            Notifier.post(title: "fontfetch", subtitle: headline,
+            Notifier.post(title: "untofu", subtitle: headline,
                           body: "\(sentence(families)) — \(reopen)")
         case .dialog:
             let body = "\(headline)\n\n" + families.map { "  •  \($0)" }.joined(separator: "\n")
                      + "\n\n\(reopen)"
             Shell.osascript("""
-            display dialog "\(Shell.escape(body))" with title "fontfetch" \
+            display dialog "\(Shell.escape(body))" with title "untofu" \
             buttons {"OK"} default button "OK" with icon note
             """)
         }

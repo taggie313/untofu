@@ -3,7 +3,7 @@ import Foundation
 
 /// launchd plumbing for running the provider as a login agent.
 enum LaunchAgent {
-    static let label = "net.elusive.fontfetch"
+    static let label = "net.elusive.untofu"
 
     static var plistURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -13,16 +13,16 @@ enum LaunchAgent {
     /// The agent runs a private copy rather than the build-directory binary, so
     /// a `swift build --clean` or a moved checkout does not silently break login.
     static var installedBinary: URL {
-        Cache.root.appendingPathComponent("bin/fontfetch")
+        Cache.root.appendingPathComponent("bin/untofu")
     }
 
     static var logURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/fontfetch.log")
+            .appendingPathComponent("Library/Logs/untofu.log")
     }
 
     /// Homebrew names formula services `homebrew.mxcl.<formula>`.
-    static let brewLabel = "homebrew.mxcl.fontfetch"
+    static let brewLabel = "homebrew.mxcl.untofu"
 
     static var isLoaded: Bool { loaded(label) }
     static var brewServiceLoaded: Bool { loaded(brewLabel) }
@@ -39,8 +39,8 @@ enum LaunchAgent {
             throw Failure("""
             A Homebrew-managed service (\(brewLabel)) is already loaded.
             Installing a second agent would have the two race over the same cache.
-            Use `brew services restart fontfetch` instead, or run
-            `brew services stop fontfetch` first if you want the standalone agent.
+            Use `brew services restart untofu` instead, or run
+            `brew services stop untofu` first if you want the standalone agent.
             """)
         }
 
@@ -85,7 +85,7 @@ enum LaunchAgent {
         if kill(pid, SIGHUP) == 0 { Log.debug("signalled running agent (pid \(pid))") }
     }
 
-    static var pidURL: URL { Cache.root.appendingPathComponent("fontfetch.pid") }
+    static var pidURL: URL { Cache.root.appendingPathComponent("untofu.pid") }
 
     // MARK: - Helpers
 

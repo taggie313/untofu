@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Regression tests for fontfetch.
+# Regression tests for untofu.
 #
 #   ./scripts/selftest.sh                 resolution tests only (needs network)
 #   ./scripts/selftest.sh --with-keynote  also runs the full Keynote end-to-end
 #
 # The Keynote test drives Keynote via AppleScript and needs Automation
 # permission. It installs a font, authors a deck against it, uninstalls the font,
-# and checks that fontfetch puts it back — the only test that exercises the
+# and checks that untofu puts it back — the only test that exercises the
 # sandboxed-client path that motivates this whole tool.
 
 set -uo pipefail
 set +m   # no job-control chatter when the test daemon is killed
 cd "$(dirname "$0")/.."
 
-BIN=./.build/debug/fontfetch
-CACHE="$HOME/Library/Application Support/fontfetch"
+BIN=./.build/debug/untofu
+CACHE="$HOME/Library/Application Support/untofu"
 PASS=0; FAIL=0
 
 ok()   { echo "  PASS  $1"; PASS=$((PASS+1)); }

@@ -3,17 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>fontfetch — missing fonts, fetched instead of complained about</title>
-<meta name="description" content="Open a document with fonts you don't have and macOS substitutes something else, then asks which replacements you'd like. fontfetch answers the request instead: it finds the font, fetches it, and hands it to the app. Free and open source.">
+<title>untofu — missing fonts, fetched instead of complained about</title>
+<meta name="description" content="Open a document with fonts you don't have and macOS substitutes something else, then asks which replacements you'd like. untofu answers the request instead: it finds the font, fetches it, and hands it to the app. Free and open source.">
 
-<meta property="og:title" content="fontfetch">
+<meta property="og:title" content="untofu">
 <meta property="og:description" content="Missing fonts, fetched instead of complained about. Free and open source.">
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://fontfetch.elusive.net/">
-<meta property="og:image" content="https://fontfetch.elusive.net/og.jpg">
+<meta property="og:url" content="https://untofu.elusive.net/">
+<meta property="og:image" content="https://untofu.elusive.net/og.jpg">
 <meta property="og:image:width" content="640">
 <meta property="og:image:height" content="640">
-<meta property="og:image:alt" content="The fontfetch mark: a letter A standing in a missing-glyph box">
+<meta property="og:image:alt" content="The untofu mark: a letter standing in an empty tofu box">
 <meta name="twitter:card" content="summary">
 
 <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -148,20 +148,27 @@ footer p { margin: 0 0 .7em; }
 <header class="wrap">
   <div class="brand">
     <img class="mark" src="icon.svg" width="72" height="72"
-         alt="fontfetch: a letter A standing in a missing-glyph box">
-    <h1>fontfetch</h1>
+         alt="untofu: a letter standing in an empty tofu box">
+    <h1>untofu</h1>
   </div>
   <p class="lede">Open a document built with fonts you don't have and macOS
      quietly swaps in something else, then asks which replacements you'd like.
-     fontfetch answers the request instead: it finds the font, fetches it, and
+     untofu answers the request instead: it finds the font, fetches it, and
      hands it to the application that asked.</p>
 
   <pre class="term"><span class="p">$</span> brew tap taggie313/tap
 <span class="p">$</span> brew trust taggie313/tap
-<span class="p">$</span> brew install fontfetch
-<span class="p">$</span> brew services start fontfetch</pre>
+<span class="p">$</span> brew install untofu
+<span class="p">$</span> brew services start untofu</pre>
 
-  <p><a class="alt" href="https://github.com/taggie313/fontfetch">Source on GitHub &rarr;</a></p>
+  <p><a class="alt" href="https://github.com/taggie313/untofu">Source on GitHub &rarr;</a></p>
+
+  <p class="disclaim"><strong>Tofu</strong> is the typographer's word for
+     &#9633;, the blank box a renderer draws when it has nothing to set a
+     character in. macOS doesn't literally draw tofu for a missing font — it
+     substitutes something else and asks you to pick a replacement — but it's the
+     same failure in a politer suit. The icon is that box with a real letter
+     standing in it.</p>
 
   <p class="disclaim">Free and open source under the MIT licence. Fetches only
      openly-licensed families from Google Fonts; it will not obtain a commercial
@@ -186,7 +193,7 @@ that. It just asks you to pick something else.</p>
 <h2>What it does instead</h2>
 
 <p>macOS has a system-wide hook that fires whenever any application asks for a
-font it can't resolve. fontfetch listens on it. When the request is for a family
+font it can't resolve. untofu listens on it. When the request is for a family
 it can obtain, it fetches the font and hands the file straight back to the
 asking application — no installer, no Font Book, no dialog.</p>
 
@@ -210,7 +217,7 @@ there. Everything after that is instant.</p>
 <h2>Where it works</h2>
 
 <p>Each of these was checked by building a document against a font, removing
-that font from the machine, and opening the document with fontfetch running.</p>
+that font from the machine, and opening the document with untofu running.</p>
 
 <div class="tablewrap">
 <table>
@@ -231,7 +238,7 @@ Inside Acrobat, use Adobe Fonts.</p>
 
 <h3>Browsers are deliberately left alone</h3>
 
-<p>Web pages reach the same hook, and fontfetch declines them. A font already in
+<p>Web pages reach the same hook, and untofu declines them. A font already in
 the cache is still handed over — that costs nothing — but a browser never
 triggers a download and never raises a dialog.</p>
 
@@ -244,7 +251,7 @@ without it, because the <code>url()</code> is right there.</p>
 
 <div class="panel warn">
   <h3>This one is about privacy, not tidiness</h3>
-  <p>Every font a page asks for and fontfetch can't find would otherwise become
+  <p>Every font a page asks for and untofu can't find would otherwise become
   a request to GitHub. Fetching on behalf of a browser would quietly leak the
   shape of your browsing to a third party, so it is off by default rather than
   as a matter of preference. <code>--fetch-for-browsers</code> turns it on if
@@ -255,7 +262,7 @@ without it, because the <code>url()</code> is right there.</p>
 
 <div class="panel warn">
   <h3>It can't get you a commercial font</h3>
-  <p>fontfetch fetches from the openly-licensed Google Fonts catalogue and
+  <p>untofu fetches from the openly-licensed Google Fonts catalogue and
   nothing else. If a document wants a licensed typeface, no tool should quietly
   go and get it for you, and this one doesn't. It tells you what's missing and
   points at Adobe Fonts, MyFonts, Fontspring and WhatTheFont so you can sort out
@@ -264,10 +271,10 @@ without it, because the <code>url()</code> is right there.</p>
 
 <div class="panel warn">
   <h3>Apple may remove the hook it depends on</h3>
-  <p>The system hook fontfetch uses has been marked deprecated since macOS 11,
+  <p>The system hook untofu uses has been marked deprecated since macOS 11,
   with a note saying it will be removed in a future release. It still works on
   macOS 26, fifteen releases later, but that removal is the expected end of this
-  tool's life. If it happens, fontfetch exits with a clear message and missing
+  tool's life. If it happens, untofu exits with a clear message and missing
   fonts behave exactly as they did before it was installed. Nothing breaks; it
   just stops helping.</p>
 </div>
@@ -288,13 +295,13 @@ granted access to.</p>
 
 <p>The whole thing is a background launchd agent. There is no window, no menu
 bar item and nothing in the Dock. It is invisible until it has something to say.
-The <a href="https://github.com/taggie313/fontfetch">README</a> documents the
+The <a href="https://github.com/taggie313/untofu">README</a> documents the
 undocumented parts, including the return type the headers don't specify and the
 crash you get for guessing wrong.</p>
 
 <div class="panel good">
   <p><strong>Already have a font manager?</strong> RightFont, Typeface and
-  FontBase all auto-activate fonts from a library you already own. fontfetch
+  FontBase all auto-activate fonts from a library you already own. untofu
   solves the other half — the font you don't have yet — and is happy to sit
   alongside them.</p>
 </div>
@@ -302,10 +309,10 @@ crash you get for guessing wrong.</p>
 </main>
 
 <footer class="wrap">
-  <p>fontfetch is free and open source under the MIT licence.
-     <a href="https://github.com/taggie313/fontfetch">Source and issues on GitHub</a>.</p>
+  <p>untofu is free and open source under the MIT licence.
+     <a href="https://github.com/taggie313/untofu">Source and issues on GitHub</a>.</p>
   <p>Fonts fetched by this tool carry their own licences — everything in the
-     Google Fonts catalogue is OFL, Apache 2.0 or UFL. fontfetch downloads and
+     Google Fonts catalogue is OFL, Apache 2.0 or UFL. untofu downloads and
      caches them for your own use; it does not redistribute them.</p>
   <p>Built by <a href="https://elusive.net">Elusive</a>. Not affiliated with
      Apple, Adobe, Google or Microsoft.</p>

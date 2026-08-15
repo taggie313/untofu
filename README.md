@@ -1,15 +1,15 @@
-# fontfetch
+# untofu
 
 Supplies missing fonts to any macOS application, on demand, instead of letting it
 complain.
 
 Open a document whose fonts you don't have and macOS substitutes Helvetica and
-shows you a dialog asking which replacements you'd like. fontfetch sits under
+shows you a dialog asking which replacements you'd like. untofu sits under
 that: it answers the font request itself, fetching the font from Google Fonts and
 handing it to the asking application.
 
 ```
-$ fontfetch install
+$ untofu install
 $ open SomeDeck.key
    ... banner: "Fetched 3 missing fonts — Karla, Rubik, and Lora"
 ```
@@ -17,13 +17,19 @@ $ open SomeDeck.key
 It is a background launchd agent. No Dock icon, no menu-bar item, no window. It
 is invisible until it has something to say.
 
+**The name.** *Tofu* is the typographer's word for `□`, the blank box a renderer
+draws when it has nothing to set a character in. macOS does not literally draw
+tofu for a missing font — it silently substitutes something else and then asks
+you to choose a replacement — but it is the same failure wearing a politer face,
+and this removes it. The icon is that box with a real letter standing in it.
+
 ## Install
 
 ```bash
 brew tap taggie313/tap
 brew trust taggie313/tap
-brew install fontfetch
-brew services start fontfetch
+brew install untofu
+brew services start untofu
 ```
 
 `brew trust` is required by Homebrew 6 for any third-party tap; the install is
@@ -33,22 +39,22 @@ Or from source:
 
 ```bash
 swift build -c release
-./.build/release/fontfetch install
+./.build/release/untofu install
 ```
 
-`install` copies the binary to `~/Library/Application Support/fontfetch/bin/` and
+`install` copies the binary to `~/Library/Application Support/untofu/bin/` and
 registers a login agent, so a later `swift build --clean` or a moved checkout
 won't silently break it. Use one mechanism or the other, never both — two agents
 sharing one cache race over it, so `install` refuses when a Homebrew-managed
-service is loaded and `fontfetch status` reports each of them.
+service is loaded and `untofu status` reports each of them.
 
 ```
-fontfetch status             hook availability, agent state, cache size
-fontfetch fetch <PSName>     resolve and cache one name now
-fontfetch list               list cached faces
-fontfetch verify             drop index entries whose file has gone missing
-fontfetch uninstall          stop and remove the agent
-fontfetch notify-test        post a sample banner
+untofu status             hook availability, agent state, cache size
+untofu fetch <PSName>     resolve and cache one name now
+untofu list               list cached faces
+untofu verify             drop index entries whose file has gone missing
+untofu uninstall          stop and remove the agent
+untofu notify-test        post a sample banner
 ```
 
 ## How it works
@@ -140,7 +146,7 @@ machine-wide. This hook is the sanctioned path.
 ### Application compatibility
 
 Each of these was tested by authoring a document against a font, removing that
-font from the system, and opening the document with fontfetch running.
+font from the system, and opening the document with untofu running.
 
 | Application | Consults the hook | Notes |
 | --- | --- | --- |
@@ -151,7 +157,7 @@ font from the system, and opening the document with fontfetch running.
 
 Acrobat is the interesting failure. It has its own font engine and multiple-master
 substitution and never asks CoreText, which is presumably why Adobe built font
-activation *into* their applications rather than relying on the system. fontfetch
+activation *into* their applications rather than relying on the system. untofu
 cannot help inside Acrobat; use Adobe Fonts there.
 
 PowerPoint is the interesting success, and it shapes two design choices. It
@@ -193,15 +199,15 @@ Three reasons that matters:
 - It is traffic and downloads for pages that never needed them.
 - Unobtainable brand fonts pop a dialog at someone who is only browsing. Google
   properties ask for `Product Sans`, which nobody can obtain.
-- Every unresolved name becomes a GitHub API call. Left unchecked, fontfetch
+- Every unresolved name becomes a GitHub API call. Left unchecked, untofu
   quietly leaks the shape of your browsing to a third party. This is the reason
   the default is off rather than a matter of taste.
 
-`fontfetch policy <pid>` reports how any given process would be treated.
+`untofu policy <pid>` reports how any given process would be treated.
 
 Run the regression suite with `./scripts/selftest.sh`, or
 `./scripts/selftest.sh --with-keynote` to include the full end-to-end (installs a
-font, authors a deck against it, removes the font, and checks fontfetch puts it
+font, authors a deck against it, removes the font, and checks untofu puts it
 back).
 
 ## Limitations
@@ -210,17 +216,17 @@ back).
 marked `CT_DEPRECATED(macos(10.6, 11.0))` with "This functionality will be removed
 in a future release" since macOS 11. It still works on macOS 26, fifteen releases
 later, but its removal is the expected end of this tool's life. When that happens
-`fontfetch run` exits with a clear message and code 3, and missing fonts behave
+`untofu run` exits with a clear message and code 3, and missing fonts behave
 exactly as they did before — nothing breaks, the tool just stops helping.
 
 **Google Fonts only.** Commercial fonts will not resolve, correctly. If you have
-a licensed font, install it the normal way. When a font can't be found, fontfetch
+a licensed font, install it the normal way. When a font can't be found, untofu
 explains why and offers somewhere to look — Adobe Fonts, MyFonts, Fontspring,
 WhatTheFont — or copies the name to your clipboard. Suppress that with
 `--no-dialog`.
 
 **Not every application asks.** Adobe Acrobat resolves fonts internally and never
-consults the system hook, so fontfetch is invisible to it. See the compatibility
+consults the system hook, so untofu is invisible to it. See the compatibility
 table above.
 
 **GitHub rate limit.** Directory listings use the unauthenticated GitHub API at 60
@@ -229,7 +235,7 @@ for six hours so a document full of unavailable corporate fonts doesn't hammer i
 
 **Notifications borrow another identity.** Banners are posted via `osascript
 display notification`, which attributes them to whichever bundle osascript posts
-under, rather than to fontfetch. Using `UNUserNotificationCenter` instead would
+under, rather than to untofu. Using `UNUserNotificationCenter` instead would
 require becoming a bundled, signed application — and a permanent Dock or menu-bar
 presence — for something that fires a handful of times a year. If banners never
 appear, check System Settings → Notifications → Script Editor. Run with `--quiet`
@@ -240,5 +246,5 @@ to disable them.
 MIT. See [LICENSE](LICENSE).
 
 Fonts fetched by this tool carry their own licenses — everything under
-`google/fonts` is OFL, Apache 2.0 or UFL. fontfetch downloads and caches them
+`google/fonts` is OFL, Apache 2.0 or UFL. untofu downloads and caches them
 for your own use; it does not redistribute them.

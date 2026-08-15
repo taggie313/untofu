@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "fontfetch",
+    name: "untofu",
     platforms: [.macOS(.v12)],
     targets: [
         // Thin C shim that owns the CoreText font-request hook. Kept deliberately
@@ -17,7 +17,7 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "fontfetch",
+            name: "untofu",
             dependencies: ["CFontProvider"]
         ),
     ]
