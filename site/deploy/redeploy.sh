@@ -66,9 +66,29 @@ echo "==> restarting compose"
 # nginx.conf is a single-file bind mount and tar replaces the file rather than
 # writing through it, so the container keeps the old inode until it is recreated.
 # Same trap clickgraft documents. --force-recreate is the cheap fix.
+# --remove-orphans: renaming a service leaves the old container behind, still
+# holding its network aliases. That is precisely how the `web` collision below
+# survived a redeploy.
 ssh "$PVE_HOST" "pct exec $CTID -- sh -c '
-  cd $REMOTE_DIR && docker compose up -d --force-recreate
+  cd $REMOTE_DIR && docker compose up -d --force-recreate --remove-orphans
 '"
+
+echo "==> checking for network-name collisions"
+# Compose registers each service name as an alias on the shared network. If two
+# containers claim the same name, Docker DNS round-robins between them and the
+# tunnel silently serves the wrong site for half of all requests. Both origins
+# stay healthy throughout, so every naive check passes.
+DUPES=$(ssh "$PVE_HOST" "pct exec $CTID -- docker network inspect clickgraft_default \
+  --format '{{range .Containers}}{{.Name}} {{end}}'" | tr ' ' '\n' | grep -v '^$' | while read -r c; do
+    ssh "$PVE_HOST" "pct exec $CTID -- docker inspect -f '{{range .NetworkSettings.Networks}}{{range .Aliases}}{{println .}}{{end}}{{end}}' $c" 2>/dev/null
+  done | sort | uniq -d)
+if [ -n "$DUPES" ]; then
+  echo "✗ two containers on clickgraft_default answer to the same name(s):" >&2
+  echo "$DUPES" | sed 's/^/     /' >&2
+  echo "   Docker DNS will round-robin between them and route traffic wrongly." >&2
+  exit 1
+fi
+echo "   no duplicate names on the shared network ✓"
 
 echo "==> verifying origin"
 ssh "$PVE_HOST" "pct exec $CTID -- sh -c '
@@ -80,8 +100,25 @@ ssh "$PVE_HOST" "pct exec $CTID -- sh -c '
   docker exec clickgraft-web-1 wget -qO- http://127.0.0.1/ | head -c 400
 '" | grep -q "ClickGraft" && echo "   clickgraft still serving ✓"
 
+echo "==> confirming clickgraft's PUBLIC url still serves clickgraft"
+# Deliberately checks content, not status. A wrong site returns 200 perfectly
+# happily, which is exactly how a routing bug reached production here once.
+CG=$(curl -sS --max-time 20 https://clickgraft.elusive.net/ 2>/dev/null | grep -o '<title>[^<]*</title>' | head -1)
+case "$CG" in
+  *ClickGraft*) echo "   clickgraft public url correct ✓" ;;
+  "")           echo "   ! could not read clickgraft's public url (DNS?); check by hand" >&2 ;;
+  *)            echo "✗ clickgraft.elusive.net is serving: $CG" >&2
+                echo "   Tunnel routing is wrong. Check for duplicate network names." >&2
+                exit 1 ;;
+esac
+
 echo "==> public URL"
-if curl -sSf -o /dev/null -w "   %{http_code} %{url_effective}\n" "$PUBLIC_URL"; then
+# Resolved against public DNS: this script's own curl is what poisons the local
+# resolver's negative cache when a hostname does not exist yet.
+HOSTNAME_ONLY=$(echo "${PUBLIC_URL#https://}" | tr -d '/')
+IP=$(dig +short @1.1.1.1 "$HOSTNAME_ONLY" 2>/dev/null | head -1)
+if [ -n "$IP" ] && curl -sSf -o /dev/null --resolve "$HOSTNAME_ONLY:443:$IP" \
+     -w "   %{http_code} %{url_effective}\n" "$PUBLIC_URL"; then
   echo "✓ deployed"
 else
   echo "   public URL not answering — add a Public Hostname on the existing tunnel:" >&2

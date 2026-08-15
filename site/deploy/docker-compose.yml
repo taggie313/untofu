@@ -8,18 +8,28 @@ name: untofu
 # anything added to it disappears the next time ClickGraft ships.
 
 services:
-  web:
+  # MUST NOT be called `web`, and no name here may be generic.
+  #
+  # Compose registers a service's own name as a network alias, so joining another
+  # project's network puts these names into that network's shared DNS namespace.
+  # This service was called `web` exactly once, which made both it and
+  # clickgraft's `web` answer to the same name. Docker's DNS round-robins between
+  # equal names, so clickgraft.elusive.net — whose tunnel rule is
+  # `http://web:80` — served this site roughly half the time. The origin
+  # containers were both perfectly healthy; only the name was wrong.
+  untofu-web:
     image: nginx:alpine
+    container_name: untofu-web-1
     restart: unless-stopped
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./html:/usr/share/nginx/html:ro
       - logs:/var/log/nginx
     networks:
-      shared:
-        # The name the tunnel's Public Hostname points at.
-        aliases:
-          - untofu-web
+      # No explicit aliases needed: the service name is already the name the
+      # tunnel's Public Hostname points at, and adding more only widens the
+      # surface for another collision.
+      - shared
     # No published ports, and no cloudflared of our own. The only way in is the
     # existing tunnel, which reaches this container over the shared network.
 
