@@ -10,14 +10,18 @@
 <meta property="og:description" content="Missing fonts, fetched instead of complained about. Free and open source.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://untofu.elusive.net/">
-<meta property="og:image" content="https://untofu.elusive.net/og.jpg">
+<meta property="og:image" content="https://untofu.elusive.net/untofu-og.jpg">
 <meta property="og:image:width" content="640">
 <meta property="og:image:height" content="640">
 <meta property="og:image:alt" content="The untofu mark: a letter standing in an empty tofu box">
 <meta name="twitter:card" content="summary">
 
-<link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="untofu-icon.svg" type="image/svg+xml">
+<!-- Named rather than left at /favicon.ico. Browsers only fall back to that
+     conventional path when no rel=icon is declared, and a site-specific name
+     means a misrouted request 404s instead of quietly serving the wrong mark. -->
+<link rel="icon" href="untofu-favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="untofu-apple-touch-icon.png">
 
 <style>
 /* One accent, one font stack, no external requests. The whole page is a
@@ -87,7 +91,7 @@ code { background: color-mix(in srgb, var(--ink) 7%, transparent);
 header { padding: clamp(3.5rem, 9vw, 6rem) 0 0; }
 .brand { display: flex; align-items: center; gap: 18px; margin: 0 0 .35em; }
 .brand h1 { margin: 0; }
-/* icon.svg is deliberately square — macOS masks icons itself, so the file
+/* untofu-icon.svg is deliberately square — macOS masks icons itself, so the file
    cannot carry its own rounded corners. The web copy gets them here. */
 .mark { border-radius: 22.4%; flex: 0 0 auto; width: clamp(56px, 11vw, 76px);
         height: auto; box-shadow: 0 2px 10px rgba(0,0,0,.18); }
@@ -147,7 +151,7 @@ footer p { margin: 0 0 .7em; }
 
 <header class="wrap">
   <div class="brand">
-    <img class="mark" src="icon.svg" width="72" height="72"
+    <img class="mark" src="untofu-icon.svg" width="72" height="72"
          alt="untofu: a letter standing in an empty tofu box">
     <h1>untofu</h1>
   </div>

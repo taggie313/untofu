@@ -28,18 +28,18 @@ SITE="$(cd "$HERE/.." && pwd)"
 REMOTE_DIR="${REMOTE_DIR:-/opt/untofu}"
 PUBLIC_URL="${PUBLIC_URL:-https://untofu.elusive.net/}"
 
-echo "==> rebuilding icons from icon.svg"
+echo "==> rebuilding icons from untofu-icon.svg"
 "$SITE/make-icons.sh" >/dev/null
 
-for f in index.html icon.svg favicon.ico apple-touch-icon.png og.jpg; do
+for f in index.html untofu-icon.svg untofu-favicon.ico untofu-apple-touch-icon.png untofu-og.jpg; do
   [ -s "$SITE/$f" ] || { echo "✗ missing $SITE/$f" >&2; exit 1; }
 done
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/html"
-cp "$SITE"/index.html "$SITE"/icon.svg "$SITE"/favicon.ico \
-   "$SITE"/apple-touch-icon.png "$SITE"/og.jpg "$WORK/html/"
+cp "$SITE"/index.html "$SITE"/untofu-icon.svg "$SITE"/untofu-favicon.ico \
+   "$SITE"/untofu-apple-touch-icon.png "$SITE"/untofu-og.jpg "$WORK/html/"
 cp "$HERE/nginx.conf" "$HERE/docker-compose.yml" "$WORK/"
 tar -czf "$WORK/payload.tgz" -C "$WORK" html nginx.conf docker-compose.yml
 
