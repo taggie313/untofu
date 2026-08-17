@@ -6,16 +6,52 @@ class Untofu < Formula
   license "MIT"
   head "https://github.com/taggie313/untofu.git", branch: "main"
 
+  # Prebuilt binary, so a normal install compiles nothing and needs no
+  # toolchain at all.
+  #
+  # Both tags point at the same file, and that is deliberate rather than a
+  # mistake: the binary inside is universal (arm64 + x86_64), built with
+  # `swift build --arch arm64 --arch x86_64`. One tarball genuinely runs on
+  # both architectures, so an Intel bottle needs no Intel Mac to produce.
+  # `any_skip_relocation` holds because the only artifact is a single
+  # self-contained executable with no baked-in Cellar paths.
+  #
+  # Coverage caveat: bottles are keyed to macOS *version* as well as
+  # architecture, and `tahoe` is macOS 26. Homebrew will use a bottle built on
+  # an older macOS on newer systems, but never the reverse — so anyone on 15 or
+  # earlier still builds from source. That is now cheap: no Xcode, just the
+  # Command Line Tools, about twenty seconds.
+  bottle do
+    root_url "https://github.com/taggie313/untofu/releases/download/v0.2.1"
+    sha256 cellar: :any_skip_relocation, arm64_tahoe:  "9244c182a975fb9bc45d544b45d714bbc3a642f06dc1fd1053ae902a253aa240"
+    sha256 cellar: :any_skip_relocation, x86_64_tahoe: "9244c182a975fb9bc45d544b45d714bbc3a642f06dc1fd1053ae902a253aa240"
+  end
+
   # CoreText's font-request hook is macOS-only, and the C shim links CoreText
   # and CoreFoundation directly.
-  depends_on xcode: ["15.0", :build]
+  #
+  # Deliberately NO `depends_on xcode:`. That line demanded a ~15 GB Xcode
+  # install from anyone building from source, and a user hit it. It was never
+  # needed: the Command Line Tools ship swiftc and the macOS SDK, which is all
+  # this builds against — verified by building the whole package with
+  # DEVELOPER_DIR pointed at /Library/Developer/CommandLineTools. Homebrew
+  # already requires the Command Line Tools to function at all, so a source
+  # build now needs nothing a Homebrew user does not already have.
+  #
+  # Most people should not compile anything: the bottle below is a prebuilt
+  # binary and needs no toolchain whatsoever.
   depends_on :macos
 
   def install
+    # Universal, so one bottle serves both architectures. The build is a few
+    # seconds either way, and it means an Intel Mac never has to be present to
+    # produce something an Intel Mac can run.
+    #
     # --disable-sandbox: SwiftPM wants to write its own build tree, which
     # Homebrew's build sandbox otherwise denies.
-    system "swift", "build", "--disable-sandbox", "--configuration", "release"
-    bin.install ".build/release/untofu"
+    system "swift", "build", "--disable-sandbox", "--configuration", "release",
+                             "--arch", "arm64", "--arch", "x86_64"
+    bin.install ".build/apple/Products/Release/untofu"
   end
 
   service do
