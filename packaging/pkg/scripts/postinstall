@@ -1,0 +1,29 @@
+#!/bin/sh
+# Load the agent for the person who just ran the installer.
+#
+# The plist lands in /Library/LaunchAgents, which launchd reads at login — so
+# without this, untofu does nothing until the user logs out and back in. That is
+# exactly the "I installed it and nothing happened" experience this package
+# exists to avoid.
+set -e
+
+LABEL=net.elusive.untofu
+PLIST=/Library/LaunchAgents/$LABEL.plist
+
+# The installer runs as root. The agent belongs to the console user, so ask who
+# that actually is rather than assuming.
+CONSOLE_USER=$(/usr/bin/stat -f%Su /dev/console)
+[ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ] || exit 0
+UID_N=$(/usr/bin/id -u "$CONSOLE_USER")
+
+# Never end up with two agents. A Homebrew-managed service and this one would
+# share a cache and race over it, which is a bug we have already had once.
+if /bin/launchctl print "gui/$UID_N/homebrew.mxcl.untofu" >/dev/null 2>&1; then
+  echo "untofu: a Homebrew-managed service is already running; leaving it alone." >&2
+  echo "untofu: the binary is installed at /usr/local/bin/untofu." >&2
+  exit 0
+fi
+
+/bin/launchctl bootout "gui/$UID_N/$LABEL" >/dev/null 2>&1 || true
+/bin/launchctl bootstrap "gui/$UID_N" "$PLIST" || true
+exit 0

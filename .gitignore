@@ -8,3 +8,4 @@ scratch/
 site/deploy/deploy.env
 site/deploy/.env
 site/deploy/html/
+dist/
