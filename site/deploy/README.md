@@ -1,86 +1,50 @@
 # Deploying untofu.elusive.net
 
-Static page served by its own nginx, running as a **co-tenant of the clickgraft
-stack** on CT 117 (`bb2`). It shares that stack's cloudflared rather than running
-a second tunnel.
+Content only. untofu does not run a web server.
 
-## Shape
-
-```
-CT 117 ─┬─ /opt/clickgraft   compose project "clickgraft"
-        │     web, cloudflared, report, stats
-        │
-        └─ /opt/untofu    compose project "untofu"
-              web  ──► joins network clickgraft_default as "untofu-web"
-```
-
-The tunnel is **token-managed**, so its ingress rules live in the Cloudflare
-dashboard and are pushed to cloudflared, which hot-reloads them. Adding a site is
-one dashboard entry and needs no restart and no token handling:
-
-```
-untofu.elusive.net  ->  http://untofu-web:80
-```
-
-## Why a separate compose project
-
-Not a service bolted onto `/opt/clickgraft/docker-compose.yml`. ClickGraft's own
-`redeploy.sh` stages its compose file and `nginx.conf`, `rsync --delete`s the
-staging directory and re-tars it into the container — so anything added to that
-file is erased the next time ClickGraft ships. A separate project in its own
-directory is immune to that, and a broken deploy here cannot take ClickGraft
-down.
-
-`redeploy.sh` checks both sites after every deploy for exactly that reason.
-
-## One coupling to know about
-
-`networks.shared` is `external: true` pointing at `clickgraft_default`, which the
-clickgraft project owns. A `docker compose down` in `/opt/clickgraft` removes
-that network; bring the clickgraft stack back up and then restart this one:
+nginx, the Cloudflare tunnel and all routing belong to the **edge** stack —
+CT 136 on bb2, repo `elusive-edge` — which is owned by no single project. This
+directory ships files into `/opt/edge/sites/untofu/html` and does nothing else.
 
 ```sh
-pct exec 117 -- sh -c 'cd /opt/untofu && docker compose up -d'
-```
-
-## Deploying
-
-```sh
-cp site/deploy/deploy.env.example site/deploy/deploy.env   # already points at CT 117
+cp site/deploy/deploy.env.example site/deploy/deploy.env   # already points at CT 136
 ./site/deploy/redeploy.sh
 ```
 
-It rebuilds the icon set, validates `nginx.conf` in a throwaway container before
-anything is replaced, ships the payload through the PVE host with `pct exec`,
-recreates the container, then checks that untofu serves, that **clickgraft
-still serves**, and finally that the public URL answers.
+## Why it is only this
 
-## Two things that will bite again
+untofu previously ran its own nginx and its own compose project, as a co-tenant
+inside ClickGraft's container — sharing a docker network and a tunnel that
+ClickGraft owned. That arrangement failed exactly the way it was shaped to: a
+service-name collision routed ClickGraft's hostname to untofu's catch-all nginx,
+which answered with untofu's content, and Cloudflare and visitors' browsers
+cached the wrong artwork under the wrong hostname. It outlived both the routing
+fix and a cache purge, and was only cured by renaming every asset on both sites.
 
-Both inherited from clickgraft, both already handled:
+Separating content from routing is the durable fix. Publishing a page now writes
+into one directory and **cannot** reach routing, so this script has no way to
+take another project's site down.
 
-- The `nginx:alpine` image ships `/var/log/nginx/access.log` as a symlink to
-  `/dev/stdout`, and a volume mounted over that directory inherits the symlink.
-  Logging to that name writes to the container's stdout and leaves the file on
-  disk permanently empty. Hence `untofu-access.log`.
-- `nginx.conf` is a single-file bind mount and `tar` replaces the file rather
-  than writing through it, so the container keeps the old inode. Hence
-  `--force-recreate` rather than a plain `up -d`.
+If routing needs changing — a new hostname, different headers, a new site — that
+is `elusive-edge`'s `redeploy.sh`, not this one.
 
-Also: `$server_protocol` already contains `HTTP/`.
+## What it verifies
 
-## Logging
+By content, not status code. The failure that produced the edge stack was a
+`200` with the wrong bytes, which a status check passes happily. So the script
+compares the live page's sha256 against the local `index.html` and fails if they
+differ, then confirms every asset returns 200.
 
-Addresses are truncated before they are written — IPv4 to its /24, IPv6 to its
-/48 — enough to tell two visitors apart on a day, not enough to point at a
-person. Requests without `CF-Connecting-IP` never came through the tunnel, so
-they are ours and are not logged.
+If the hostname is not routed to edge, the content check fails with the exact
+Public Hostname to add:
 
-No GoAccess service here, unlike clickgraft. Add one if traffic ever justifies
-it; the log format is already compatible.
+```
+untofu.elusive.net  ->  http://nginx:80
+```
 
-## HSTS
+## Rollback
 
-Host-only, `max-age` with no `includeSubDomains` and no `preload`, forever.
-Unaffiliated third-party subdomains live under `elusive.net`. Same firm
-constraint as the brand site.
+CT 117 still holds the old untofu stack, stopped but intact. Rolling back is one
+change in the Cloudflare dashboard — point `untofu.elusive.net` at ClickGraft's
+tunnel again — with no deploy required. Once the edge stack has been quiet for a
+day or two, that stack can be removed.
