@@ -1,8 +1,8 @@
 class Untofu < Formula
   desc "Supplies missing fonts to any macOS app, on demand"
   homepage "https://untofu.elusive.net"
-  url "https://github.com/taggie313/untofu/archive/refs/tags/v0.2.0.tar.gz"
-  sha256 "f3d61cee3e5c741f341e13385202557e19fcc32a4b35f30c1a66c7a50ba27aa1"
+  url "https://github.com/taggie313/untofu/releases/download/v0.2.1/untofu-0.2.1.tar.gz"
+  sha256 "3196256d12cd963cde46bbcfaeab621075b9604cda9806eef5dd1bc891e14b3b"
   license "MIT"
   head "https://github.com/taggie313/untofu.git", branch: "main"
 
