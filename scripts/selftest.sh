@@ -113,6 +113,39 @@ else
 fi
 
 echo
+echo "== document scanning =="
+rm -rf "$CACHE"
+SCANWORK=$(mktemp -d)
+# A PDF that references a font without embedding it: FontDescriptor, no
+# FontFile2. Built here rather than checked in so the test has no fixtures.
+/usr/bin/python3 - "$SCANWORK/t.pdf" <<'PY'
+import sys
+w=" ".join(["500"]*95)
+objs=[b"<< /Type /Catalog /Pages 2 0 R >>",
+      b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+      b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+      ("<< /Type /Font /Subtype /TrueType /BaseFont /Karla-Regular /FirstChar 32 /LastChar 126 /Widths [%s] /FontDescriptor 6 0 R >>"%w).encode(),
+      None,
+      b"<< /Type /FontDescriptor /FontName /Karla-Regular /Flags 32 >>"]
+s=b"BT /F1 36 Tf 72 700 Td (T) Tj ET\n"
+objs[4]=b"<< /Length %d >>\nstream\n"%len(s)+s+b"endstream"
+out=bytearray(b"%PDF-1.4\n"); offs=[]
+for i,b in enumerate(objs,1):
+    offs.append(len(out)); out+=b"%d 0 obj\n"%i+b+b"\nendobj\n"
+x=len(out); out+=b"xref\n0 %d\n"%(len(objs)+1)+b"0000000000 65535 f \n"
+for o in offs: out+=b"%010d 00000 n \n"%o
+out+=b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n"%(len(objs)+1,x)
+open(sys.argv[1],"wb").write(out)
+PY
+check "$($BIN scan "$SCANWORK/t.pdf" --dry-run 2>/dev/null | grep -c 'Karla-Regular.*would fetch')" "1" "finds a non-embedded font in a PDF"
+$BIN scan "$SCANWORK/t.pdf" >/dev/null 2>&1
+check "$($BIN list | grep -cE '^  karla-regular  ->')" "1" "scan caches what the app will actually ask for"
+# The catalogue filter is what makes iWork scanning usable: without it an empty
+# deck yields ~75 false positives and burns the hourly API budget.
+check "$($BIN scan "$SCANWORK/t.pdf" --dry-run 2>/dev/null | grep -c 'not on Google Fonts')" "0" "precise formats report only real misses"
+rm -rf "$SCANWORK"
+
+echo
 echo "== index hygiene =="
 # Self-contained: the browser section above leaves the cache empty by design,
 # so this has to put something in it rather than inherit from earlier tests.

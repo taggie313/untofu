@@ -16,6 +16,8 @@ func usage() -> Never {
       untofu install            Install and start the login agent.
       untofu uninstall          Stop and remove the login agent.
       untofu status             Show hook availability, agent state, cache size.
+      untofu scan <file>...     Read documents and fetch the fonts they need,
+                                so the first open is already correct.
       untofu fetch <PSName>     Resolve and cache one PostScript name now.
       untofu list               List cached faces.
       untofu verify             Drop index entries whose file has gone missing.
@@ -120,6 +122,77 @@ case "status":
     print("unresolved: \(cache.unresolvedNames.count) name(s) in negative cache")
     print("browsers:   cache reads only, no fetching (--fetch-for-browsers to change)")
     if !hookAvailable { exit(3) }
+
+case "scan":
+    guard positional.count > 1 else {
+        FileHandle.standardError.write(Data("scan needs a file, e.g. Deck.key\n".utf8))
+        exit(1)
+    }
+    // The catalogue lookup allows 60 requests an hour unauthenticated, and the
+    // iWork reader is heuristic enough to turn up the occasional non-font. Cap
+    // the damage a single scan can do and say so rather than silently stopping.
+    let scanBudget = 15
+    var attempted = 0
+    var fetchedAny = false
+    let catalogue = GoogleFonts.knownFamilySlugs()
+    if catalogue.isEmpty {
+        FileHandle.standardError.write(Data("could not read the Google Fonts catalogue; is the network up?\n".utf8))
+        exit(1)
+    }
+
+    func report(_ name: String, _ note: String) {
+        print("    \(name.padding(toLength: max(name.count, 30), withPad: " ", startingAt: 0))\(note)")
+    }
+
+    for path in positional.dropFirst() {
+        let url = URL(fileURLWithPath: path)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            print("\(path): no such file"); continue
+        }
+        let (format, names) = Scanner.fonts(in: url)
+        print("\(url.lastPathComponent)  [\(format)]")
+        if names.isEmpty { print("    no font references found"); continue }
+
+        // OOXML and PDF name fonts exactly, so a name the catalogue does not
+        // have is worth reporting — it is probably a commercial font the user
+        // needs to know about. The iWork reader guesses, so its misses are just
+        // noise and get counted rather than listed.
+        let precise = (format != .iWork)
+        var discarded = 0
+
+        for name in names {
+            if Scanner.isAlreadyAvailable(name) { report(name, "already installed"); continue }
+            if cache.path(for: name) != nil     { report(name, "already cached");    continue }
+            if Resolver.isKnownProprietary(name) { report(name, "skipped, proprietary"); continue }
+
+            // The question is not "does this look like a font?" but "is this a
+            // family the catalogue actually has?" — exact, and free once the
+            // catalogue is cached.
+            guard let family = Resolver.familyCandidates(for: name).first(where: { catalogue.contains($0) }) else {
+                if precise { report(name, "not on Google Fonts") } else { discarded += 1 }
+                continue
+            }
+            if flags.contains("--dry-run")    { report(name, "would fetch (\(family))"); continue }
+            guard attempted < scanBudget else { report(name, "skipped, scan budget reached"); continue }
+            attempted += 1
+            // Fetch by the matched family, not the raw string: iWork strings
+            // arrive with protobuf framing bytes stuck to them ("Lora-Regularb"),
+            // which no font answers to.
+            if Fetcher.fetch(psName: family, into: cache) {
+                fetchedAny = true
+                report(name, "fetched (\(family))")
+            } else {
+                report(name, "not on Google Fonts")
+            }
+        }
+        if discarded > 0 {
+            print("    (\(discarded) other string\(discarded == 1 ? "" : "s") examined and discarded — "
+                + "iWork font references are inferred, not declared)")
+        }
+    }
+    // A running agent holds its index in memory, so without this the fonts we
+    // just cached would not be served until it restarted.
+    if fetchedAny { LaunchAgent.reloadRunningAgent() }
 
 case "fetch":
     guard positional.count > 1 else {

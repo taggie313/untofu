@@ -17,6 +17,26 @@ enum Shell {
                     .trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
     }
 
+    /// Raw bytes, for output that is not text. Document scanning reads
+    /// compressed protobuf out of `unzip -p`, which would be mangled by decoding
+    /// it as a String first.
+    ///
+    /// Reads the pipe to the end *before* waiting on the process: doing it the
+    /// other way round deadlocks as soon as the output exceeds the pipe buffer,
+    /// which a document of any size does.
+    static func runData(_ tool: String, _ arguments: [String]) -> Data {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: tool)
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { return Data() }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return data
+    }
+
     /// Runs an AppleScript and returns its result. Used for the few pieces of UI
     /// a non-bundled launchd agent can still put on screen.
     @discardableResult

@@ -13,6 +13,57 @@ enum GoogleFonts {
         let url: URL
     }
 
+    /// Every family slug in the catalogue, cached on disk for a week.
+    ///
+    /// This exists for document scanning. Reading fonts out of an iWork file is
+    /// heuristic — the model is compressed protobuf with no schema — and asking
+    /// "does this string look like a font name?" accepts slide layout names,
+    /// gradient presets and UUIDs alike. Roughly seventy false positives from
+    /// one empty Keynote deck, which would exhaust an hour's API budget.
+    ///
+    /// Asking instead "is this a family the catalogue actually has?" is exact,
+    /// and costs a handful of requests once a week rather than one per guess.
+    static func knownFamilySlugs() -> Set<String> {
+        let cacheFile = Cache.root.appendingPathComponent("families.json")
+        if let data = try? Data(contentsOf: cacheFile),
+           let cached = try? JSONDecoder().decode(FamilyCache.self, from: data),
+           Date().timeIntervalSince(cached.fetched) < 7 * 24 * 3600 {
+            return Set(cached.slugs)
+        }
+
+        var slugs = Set<String>()
+        // The contents API caps out well below the ~1800 families in ofl/, so
+        // walk the git tree instead, which returns a directory whole.
+        guard let rootData = get(URL(string: "https://api.github.com/repos/google/fonts/git/trees/main")!).data,
+              let root = try? JSONSerialization.jsonObject(with: rootData) as? [String: Any],
+              let tree = root["tree"] as? [[String: Any]]
+        else { return [] }
+
+        for entry in tree {
+            guard let path = entry["path"] as? String, licenseDirs.contains(path),
+                  let sha = entry["sha"] as? String,
+                  let subData = get(URL(string: "https://api.github.com/repos/google/fonts/git/trees/\(sha)")!).data,
+                  let sub = try? JSONSerialization.jsonObject(with: subData) as? [String: Any],
+                  let families = sub["tree"] as? [[String: Any]]
+            else { continue }
+            for family in families where family["type"] as? String == "tree" {
+                if let name = family["path"] as? String { slugs.insert(name) }
+            }
+        }
+
+        guard !slugs.isEmpty else { return [] }
+        if let data = try? JSONEncoder().encode(FamilyCache(fetched: Date(), slugs: Array(slugs))) {
+            try? data.write(to: cacheFile)
+        }
+        Log.debug("catalogue: \(slugs.count) families")
+        return slugs
+    }
+
+    private struct FamilyCache: Codable {
+        let fetched: Date
+        let slugs: [String]
+    }
+
     /// Font files in `<license>/<slug>/`, or nil when that directory does not exist.
     static func listing(license: String, slug: String) -> [RemoteFile]? {
         let api = URL(string: "https://api.github.com/repos/google/fonts/contents/\(license)/\(slug)")!
