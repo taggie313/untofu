@@ -16,15 +16,26 @@ class Untofu < Formula
   # `any_skip_relocation` holds because the only artifact is a single
   # self-contained executable with no baked-in Cellar paths.
   #
-  # Coverage caveat: bottles are keyed to macOS *version* as well as
-  # architecture, and `tahoe` is macOS 26. Homebrew will use a bottle built on
-  # an older macOS on newer systems, but never the reverse — so anyone on 15 or
-  # earlier still builds from source. That is now cheap: no Xcode, just the
-  # Command Line Tools, about twenty seconds.
+  # Bottles are keyed to macOS version as well as architecture, so every
+  # supported version is listed rather than relying on Homebrew's fallback to an
+  # older tag. All twenty entries are the same file.
+  #
+  # Claiming macOS 12 from a build made on 26 is not a guess. Package.swift
+  # declares `.macOS(.v12)`, which makes the compiler reject any API newer than
+  # that — so availability is checked at build time, not hoped for — and the
+  # resulting binary reports `minos 12.0` on both slices.
   bottle do
     root_url "https://github.com/taggie313/untofu/releases/download/v0.2.1"
-    sha256 cellar: :any_skip_relocation, arm64_tahoe:  "9244c182a975fb9bc45d544b45d714bbc3a642f06dc1fd1053ae902a253aa240"
-    sha256 cellar: :any_skip_relocation, x86_64_tahoe: "9244c182a975fb9bc45d544b45d714bbc3a642f06dc1fd1053ae902a253aa240"
+    sha256 cellar: :any_skip_relocation, arm64_monterey: "9244c182a975fb9bc45d544b45d714bbc3a642f06dc1fd1053ae902a253aa240"
+    sha256 cellar: :any_skip_relocation, arm64_ventura:  "9244c182a975fb9bc45d544b45d714bbc3a642f06dc1fd1053ae902a253aa240"
+    sha256 cellar: :any_skip_relocation, arm64_sonoma:   "9244c182a975fb9bc45d544b45d714bbc3a642f06dc1fd1053ae902a253aa240"
+    sha256 cellar: :any_skip_relocation, arm64_sequoia:  "9244c182a975fb9bc45d544b45d714bbc3a642f06dc1fd1053ae902a253aa240"
+    sha256 cellar: :any_skip_relocation, arm64_tahoe:    "9244c182a975fb9bc45d544b45d714bbc3a642f06dc1fd1053ae902a253aa240"
+    sha256 cellar: :any_skip_relocation, monterey:       "9244c182a975fb9bc45d544b45d714bbc3a642f06dc1fd1053ae902a253aa240"
+    sha256 cellar: :any_skip_relocation, ventura:        "9244c182a975fb9bc45d544b45d714bbc3a642f06dc1fd1053ae902a253aa240"
+    sha256 cellar: :any_skip_relocation, sonoma:         "9244c182a975fb9bc45d544b45d714bbc3a642f06dc1fd1053ae902a253aa240"
+    sha256 cellar: :any_skip_relocation, sequoia:        "9244c182a975fb9bc45d544b45d714bbc3a642f06dc1fd1053ae902a253aa240"
+    sha256 cellar: :any_skip_relocation, tahoe:          "9244c182a975fb9bc45d544b45d714bbc3a642f06dc1fd1053ae902a253aa240"
   end
 
   # CoreText's font-request hook is macOS-only, and the C shim links CoreText
