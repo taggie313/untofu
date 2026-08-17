@@ -90,6 +90,29 @@ sed -i '' "s|^  sha256 \".*\"|  sha256 \"$SHA\"|" "$FORMULA"
 echo "==> formula now reads:"
 grep -E '^\s+(url|sha256)' "$FORMULA"
 
+# The installer package, for everyone who does not have Homebrew — which is
+# most of the people who actually hit a missing-font dialog.
+#
+# Not fatal if it cannot be built: a release with a bottle and no package is
+# still a release, and the credentials live on one machine. But say so loudly,
+# because silently shipping a version whose website offers the *previous*
+# package would be worse than not offering one.
+echo "==> installer package"
+if ./packaging/make-pkg.sh "$VERSION"; then
+  gh release upload "$TAG" "dist/untofu-$VERSION.pkg" --repo "$REPO" --clobber >/dev/null
+  PKG_URL="https://github.com/$REPO/releases/download/$TAG/untofu-$VERSION.pkg"
+
+  # The site links a specific version, so it has to move with the release or it
+  # quietly keeps offering an old one.
+  sed -i '' -E "s|https://github.com/$REPO/releases/download/v[0-9.]+/untofu-[0-9.]+\.pkg|$PKG_URL|" site/index.html
+  sed -i '' -E "s|([0-9]+\.[0-9]+\.[0-9]+) &middot; universal|$VERSION \&middot; universal|" site/index.html
+  echo "    published, and site/index.html now points at $VERSION"
+  echo "    remember: ./site/deploy/redeploy.sh"
+else
+  echo "  ✗ package not built (see above). The site still offers the previous" >&2
+  echo "    version — fix the credentials and re-run, or update the link by hand." >&2
+fi
+
 cat <<EOS
 
 Next: copy the formula into the tap and push it.

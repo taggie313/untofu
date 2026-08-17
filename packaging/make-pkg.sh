@@ -111,7 +111,25 @@ if ! xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; the
   exit 3
 fi
 xcrun notarytool submit "$OUT" --keychain-profile "$PROFILE" --wait
-xcrun stapler staple "$OUT"
+
+# Stapling races Apple's CDN. `notarytool --wait` returns as soon as the
+# submission is Accepted, but the ticket takes a further moment to become
+# fetchable, and stapling before then fails with "Record not found" — which
+# looks alarming and means nothing. Observed on the very first run of this
+# script, so retry rather than leave it as a manual step.
+#
+# Worth stapling at all because notarisation alone only satisfies Gatekeeper
+# when the machine can reach Apple. The stapled ticket travels inside the file,
+# so the package installs offline too.
+echo "==> stapling"
+for attempt in 1 2 3 4 5 6; do
+  if xcrun stapler staple "$OUT" >/dev/null 2>&1; then
+    echo "    stapled (attempt $attempt)"
+    break
+  fi
+  [ "$attempt" = 6 ] && { echo "  ✗ ticket never became available; re-run: xcrun stapler staple $OUT" >&2; exit 4; }
+  sleep 20
+done
 
 echo "==> verifying the way Gatekeeper will see it"
 spctl -a -vv -t install "$OUT" 2>&1 | sed 's/^/    /'

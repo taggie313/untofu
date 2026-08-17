@@ -139,6 +139,20 @@ td.no  { font-weight: 660; color: var(--warm-ink); }
 .facts b { font-weight: 640; }
 .facts span { color: var(--muted); }
 
+/* Download is the primary path now. The people who hit a missing-font dialog
+   are opening a deck, not running a terminal, and Homebrew was excluding
+   exactly the audience this was built for. */
+.dl {
+  display: inline-block; margin: 1.6rem 0 .35rem;
+  background: var(--accent); color: var(--accent-ink);
+  text-decoration: none; font-weight: 600;
+  padding: .7rem 1.15rem; border-radius: 8px; line-height: 1.25;
+}
+.dl:hover { filter: brightness(1.08); }
+.dl small { display: block; font-weight: 400; opacity: .82; font-size: .78em; margin-top: .15rem; }
+.req { margin: 0 0 1.9rem; font-size: .875rem; color: var(--faint); }
+.orbrew { margin: 0 0 .5rem; font-size: .9rem; color: var(--muted); }
+
 footer {
   margin: 5rem 0 0; border-top: 1px solid var(--rule);
   padding: 2rem 0 4rem; font-size: .875rem; color: var(--faint);
@@ -159,6 +173,15 @@ footer p { margin: 0 0 .7em; }
      quietly swaps in something else, then asks which replacements you'd like.
      untofu answers the request instead: it finds the font, fetches it, and
      hands it to the application that asked.</p>
+
+  <a class="dl" href="https://github.com/taggie313/untofu/releases/download/v0.2.1/untofu-0.2.1.pkg">
+     Download for macOS
+     <small>0.2.1 &middot; universal &middot; signed and notarised</small></a>
+
+  <p class="req">macOS 12 or later, Apple silicon or Intel. Installs to
+     <code>/usr/local/bin</code> and starts on its own — there is nothing to open.</p>
+
+  <p class="orbrew">Or with Homebrew:</p>
 
   <pre class="term"><span class="p">$</span> brew tap taggie313/tap
 <span class="p">$</span> brew trust taggie313/tap
