@@ -88,7 +88,12 @@ code { background: color-mix(in srgb, var(--ink) 7%, transparent);
        padding: .12em .38em; border-radius: 4px; }
 
 /* ---- masthead ---- */
-header { padding: clamp(3.5rem, 9vw, 6rem) 0 0; }
+/* header also carries .wrap, and a CLASS selector beats an ELEMENT one no
+   matter which comes first in the file — so .wrap's `padding: 0 24px` was
+   quietly winning and this top padding never applied at all. The icon sat
+   flush against the browser chrome. Out-specify it rather than reorder,
+   because reordering would break again the moment .wrap moves. */
+header.wrap { padding-top: clamp(3.5rem, 9vw, 6rem); }
 .brand { display: flex; align-items: center; gap: 18px; margin: 0 0 .35em; }
 .brand h1 { margin: 0; }
 /* untofu-icon.svg is deliberately square — macOS masks icons itself, so the file
