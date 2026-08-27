@@ -30,7 +30,7 @@ SITE="$(cd "$HERE/.." && pwd)"
 REMOTE_DIR="${REMOTE_DIR:-/opt/edge/sites/untofu}"
 PUBLIC_URL="${PUBLIC_URL:-https://untofu.elusive.net/}"
 
-ASSETS="index.html untofu-icon.svg untofu-favicon.ico untofu-apple-touch-icon.png untofu-og.jpg"
+ASSETS="index.html untofu-icon.svg untofu-favicon.ico untofu-apple-touch-icon.png untofu-og.jpg robots.txt sitemap.xml"
 
 echo "==> rebuilding icons from untofu-icon.svg"
 "$SITE/make-icons.sh" >/dev/null

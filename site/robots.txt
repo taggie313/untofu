@@ -1,0 +1,10 @@
+# untofu — https://untofu.elusive.net
+#
+# Indexing is welcome; the binaries live on GitHub, so there is nothing here
+# worth keeping crawlers away from. Cloudflare merges its own managed block
+# (AI training agents) into this file.
+
+User-agent: *
+Allow: /
+
+Sitemap: https://untofu.elusive.net/sitemap.xml
