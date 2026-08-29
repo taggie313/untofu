@@ -78,11 +78,30 @@ enum LaunchAgent {
 
     /// Nudges a running agent to re-read the on-disk index.
     static func reloadRunningAgent() {
-        guard let text = try? String(contentsOf: pidURL, encoding: .utf8),
-              let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)),
-              pid > 0
-        else { return }
-        if kill(pid, SIGHUP) == 0 { Log.debug("signalled running agent (pid \(pid))") }
+        if let text = try? String(contentsOf: pidURL, encoding: .utf8),
+           let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)),
+           pid > 0, kill(pid, SIGHUP) == 0 {
+            Log.debug("signalled running agent (pid \(pid))")
+            return
+        }
+
+        // The pid file lives in the cache directory, so anything that clears the
+        // cache orphans it — and then every CLI change that needs the agent to
+        // notice would silently do nothing. That is exactly how a `folders
+        // --rescan` came to record 581 faces while the agent went on serving
+        // 544, reporting success the whole time.
+        let mine = getpid()
+        for pid in runningAgents() where pid != mine {
+            if kill(pid, SIGHUP) == 0 { Log.debug("signalled running agent (pid \(pid), found by name)") }
+        }
+    }
+
+    /// PIDs of agents belonging to this user, for when the pid file is gone.
+    private static func runningAgents() -> [pid_t] {
+        let result = run("/usr/bin/pgrep", ["-u", String(getuid()), "-f", "untofu run"])
+        guard result.status == 0 else { return [] }
+        return result.output.split(whereSeparator: { $0.isNewline || $0 == " " })
+            .compactMap { pid_t($0) }
     }
 
     static var pidURL: URL { Cache.root.appendingPathComponent("untofu.pid") }

@@ -190,9 +190,26 @@ fi
 check "$($BIN folders | sed -n '/^Searched with no permission needed:/,/^$/p' \
           | grep -cE '/Users/|Group Containers|Downloads')" "0" \
       "nothing searched by default is behind a permission prompt"
-check "$($BIN local --rebuild 2>/dev/null | sed -n '/Looked in:/,/^$/p' \
+check "$($BIN local --rebuild 2>/dev/null | sed -n '/^Read directly:/,/^$/p' \
           | grep -cE 'Downloads|Group Containers|CoreSync')" "0" \
       "and a default scan opens none of those directories"
+check "$($BIN local --rebuild 2>/dev/null | grep -c '^Read directly:')" "1" \
+      "and says which directories it did open"
+
+# The pid file lives in the cache directory, so anything that clears the cache
+# orphans it — and every CLI change needing the agent to notice then silently
+# does nothing while reporting success. A `folders --rescan` recorded 581 faces
+# once while the running agent went on serving 544.
+$BIN run --quiet > "$CACHE/.sigtest.log" 2>&1 &
+SIGPID=$!
+sleep 3
+rm -f "$CACHE/untofu.pid"                       # as clearing the cache would
+$BIN fetch Cardo-Regular >/dev/null 2>&1
+sleep 2
+check "$(grep -c 'reloaded' "$CACHE/.sigtest.log")" "1" \
+      "a running agent is still reachable once its pid file is gone"
+kill $SIGPID 2>/dev/null; wait $SIGPID 2>/dev/null
+rm -f "$CACHE/.sigtest.log"
 
 # The index is cached against size and modification date. Reading every file
 # every time was the original shape, chosen on a warm benchmark of 0.13s — the
