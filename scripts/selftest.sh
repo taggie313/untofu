@@ -204,6 +204,38 @@ else
 fi
 
 echo
+echo "== preferences =="
+# A settings file that cannot be decoded used to fall back to defaults in
+# silence, so the file said searchPersonalFolders:true while every process read
+# false. The encoder writes ISO8601 dates; a decoder without a matching strategy
+# throws on the first one, which meant a single update check silently discarded
+# every choice the user had made.
+PREFS="$CACHE/preferences.json"
+mkdir -p "$CACHE"
+cat > "$PREFS" <<'JSON'
+{
+  "lastUpdateCheck" : "2026-08-29T17:07:38Z",
+  "searchPersonalFolders" : true,
+  "suppressedNames" : [ "someprivatefont-bold" ],
+  "updateChecksAllowed" : true,
+  "updateOfferMade" : true
+}
+JSON
+check "$($BIN status | grep -c '^folders: *including')" "1" \
+      "a settings file containing a date still decodes"
+check "$($BIN status | grep -c '^updates: *allowed')" "1" \
+      "and every other setting in it survives"
+check "$($BIN suppressed | grep -c 'someprivatefont-bold')" "1" \
+      "including the suppressed-name list"
+
+# Round-tripping must not lose anything either: writing one setting rewrites the
+# whole file, so a field that failed to decode would be silently dropped.
+$BIN unsuppress someprivatefont-bold >/dev/null 2>&1
+check "$($BIN status | grep -c '^folders: *including')" "1" \
+      "and changing one setting does not reset the others"
+rm -f "$PREFS"
+
+echo
 echo "== concurrency =="
 rm -rf "$CACHE"
 # Each fetch stages downloads in its own scratch directory. A shared one is a

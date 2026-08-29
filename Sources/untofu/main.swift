@@ -118,9 +118,16 @@ case "run":
     signal(SIGHUP, SIG_IGN)
     let hangup = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .global())
     hangup.setEventHandler {
+        // Preferences first: the CLI signals us precisely because it changed
+        // something, and refreshing against the setting we booted with would
+        // rescan with the old answer and persist that.
+        preferences.reload()
         cache.reload()
-        local?.refresh(includingPersonal: preferences.value(\.searchPersonalFolders))
-        Log.info("index reloaded — \(cache.entries.count) face(s)")
+        let personal = preferences.value(\.searchPersonalFolders)
+        local?.refresh(includingPersonal: personal)
+        Log.info("reloaded — \(cache.entries.count) cached face(s), "
+               + "\(local?.faceCount ?? 0) local face(s)"
+               + (personal ? " including Downloads and app containers" : ""))
     }
     hangup.resume()
 

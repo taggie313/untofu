@@ -43,12 +43,47 @@ final class Preferences {
 
     init(url: URL = Cache.root.appendingPathComponent("preferences.json")) {
         self.url = url
-        if let data = try? Data(contentsOf: url),
-           let decoded = try? JSONDecoder().decode(Stored.self, from: data) {
-            stored = decoded
-        } else {
-            stored = Stored()
+        stored = Preferences.read(url) ?? Stored()
+    }
+
+    /// Decoding has to mirror the encoder exactly, and getting that wrong was
+    /// silent and total: the encoder writes dates as ISO8601, the decoder
+    /// defaulted to expecting a number, and so the moment an update check
+    /// recorded `lastUpdateCheck` the whole file stopped decoding. Every
+    /// setting reverted to its default on the next read — the folder opt-in,
+    /// the update consent, every suppressed font name — while the file on disk
+    /// still plainly said otherwise.
+    ///
+    /// It fails loudly now. A preferences file that exists but cannot be read
+    /// is a bug, and answering with defaults as though the user had never
+    /// chosen anything is the worst possible way to report it.
+    private static func read(_ url: URL) -> Stored? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        do {
+            return try decoder.decode(Stored.self, from: data)
+        } catch {
+            Log.warn("could not read \(url.lastPathComponent) (\(error)); "
+                   + "using defaults, and your settings will be overwritten if "
+                   + "anything changes one. Delete the file to start clean.")
+            return nil
         }
+    }
+
+    /// Re-reads the file, for a long-running agent whose settings were changed
+    /// by a CLI invocation in another process.
+    ///
+    /// Without this the agent answers from whatever it read at launch, and a
+    /// preference change appears to do nothing until the next restart —
+    /// `untofu folders --allow` would index the newly-permitted directories in
+    /// the CLI process, hand the agent a SIGHUP, and watch it rescan with the
+    /// old setting and write a snapshot that drops them again.
+    func reload() {
+        guard let decoded = Preferences.read(url) else { return }
+        lock.lock()
+        stored = decoded
+        lock.unlock()
     }
 
     /// Read a value.
