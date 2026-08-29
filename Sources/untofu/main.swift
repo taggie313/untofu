@@ -220,8 +220,14 @@ case "status":
         + "(`untofu local` to see them)")
     print("unresolved: \(cache.unresolvedNames.count) name(s) in negative cache")
     print("browsers:   cache reads only, no fetching (--fetch-for-browsers to change)")
-    print("folders:    \(preferences.value(\.searchPersonalFolders) ? "including" : "excluding") "
-        + "Downloads and app containers (`untofu folders`)")
+    if preferences.value(\.searchPersonalFolders) {
+        print("folders:    including Downloads and app containers"
+            + (LocalFonts.recordHasGatedEntries
+               ? " (`untofu folders`)"
+               : " — but nothing recorded; run `untofu folders --rescan`"))
+    } else {
+        print("folders:    excluding Downloads and app containers (`untofu folders`)")
+    }
     print("suppressed: \(preferences.value(\.suppressedNames).count) name(s) you asked not to hear about")
     let updatePolicy = preferences.value(\.updateChecksAllowed)
         ? "allowed, weekly" : "only when you ask"
@@ -456,6 +462,11 @@ case "folders":
     if on {
         print("The agent serves these from what was recorded here; it never opens")
         print("them itself, so it cannot interrupt you at login.")
+        if !LocalFonts.recordHasGatedEntries {
+            print("")
+            print("  ⚠︎ Nothing from them is recorded, so none of it is being served.")
+            print("    Run `untofu folders --rescan` to read them.")
+        }
         print("")
         print("  untofu folders --rescan   re-read them (after installing new fonts)")
         print("  untofu folders --deny     stop serving them")

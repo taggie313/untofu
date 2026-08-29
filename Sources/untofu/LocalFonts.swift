@@ -217,6 +217,15 @@ final class LocalFonts {
     }
 
     var faceCount: Int { lock.lock(); defer { lock.unlock() }; return index.count }
+
+    /// Whether the record holds anything from a gated stash.
+    ///
+    /// False while opted in means the record was lost — the cache directory
+    /// removed, or a first run after opting in — and those fonts are silently
+    /// not being served despite the setting saying they are.
+    static var recordHasGatedEntries: Bool {
+        loadSnapshot().values.contains { $0.gated }
+    }
     var summary: Scan? {
         lock.lock(); defer { lock.unlock() }; return lastScan
     }
