@@ -29,6 +29,12 @@ typedef int (*FFRequestHandler)(const char *psName,
 /// a normal, survivable condition rather than an error.
 bool ff_provider_start(FFRequestHandler handler, void *context);
 
+/// Adds the source to the current runloop, in the common modes, and returns.
+///
+/// Separate from ff_provider_run so a caller that drives the main runloop itself
+/// — an AppKit process running NSApplication — can still receive font requests.
+void ff_provider_attach(void);
+
 /// Adds the source to the current runloop and runs it. Does not return.
 void ff_provider_run(void);
 

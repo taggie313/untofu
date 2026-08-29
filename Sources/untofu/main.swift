@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 
@@ -6,6 +7,7 @@ let positional = CommandLine.arguments.dropFirst().filter { !$0.hasPrefix("-") }
 Log.verbose = flags.contains("--verbose") || flags.contains("-v")
 
 let cache = Cache()
+let preferences = Preferences()
 
 func usage() -> Never {
     print("""
@@ -26,6 +28,10 @@ func usage() -> Never {
                                 fetching anything.
       untofu local              List fonts found on this Mac that no application
                                 has registered.
+      untofu update             Check now whether a newer untofu exists.
+      untofu suppressed         List fonts you asked not to be told about.
+      untofu unsuppress [name]  Start being told about them again. With no name,
+                                clears the whole list.
       untofu notify-test        Post a sample notification banner.
       untofu dialog-test        Show the "couldn't find it" dialog.
 
@@ -76,9 +82,12 @@ case "run":
     let noDialog = quiet || flags.contains("--no-dialog")
     let style: Notifier.Style = flags.contains("--banner") ? .banner : .dialog
     let local = flags.contains("--no-local") ? nil : LocalFonts()
+    // Whether anything will ever want to draw: true when either the success
+    // notifier or the unresolved panel is enabled.
+    let wantsUI = !quiet || !noDialog
     let provider = Provider(cache: cache, local: local,
                             notifier: quiet ? nil : Notifier(style: style),
-                            reporter: noDialog ? nil : UnresolvedReporter(),
+                            reporter: noDialog ? nil : UnresolvedReporter(preferences: preferences),
                             fetchForBrowsers: flags.contains("--fetch-for-browsers"))
     guard provider.start() else {
         Log.warn("""
@@ -111,10 +120,35 @@ case "run":
     // the scan fall through to the fetch path, which is the behaviour that
     // shipped before the local index existed.
     if let local {
-        DispatchQueue.global(qos: .utility).async { local.refresh() }
+        DispatchQueue.global(qos: .utility).async {
+            local.refresh()
+            if let scan = local.summary {
+                Log.info("local index: \(scan.faces) unregistered face(s) from "
+                       + "\(scan.files) file(s) in \(String(format: "%.2f", scan.duration))s")
+            }
+        }
     }
 
-    Log.info("untofu running — \(cache.entries.count) face(s) cached")
+    // Nothing here contacts a server unless the user has said it may. The offer
+    // is made once and needs an interface to make it through.
+    if wantsUI && AppHost.hasWindowServer {
+        Updater.offerIfNeeded(preferences)
+        DispatchQueue.global(qos: .background).async {
+            if let outcome = Updater.scheduledCheck(preferences) {
+                Log.info("update check: \(outcome.headline)")
+            }
+        }
+    }
+
+    // An NSApplication only when there is a user to talk to and a window server
+    // to talk through. Headless and --quiet runs keep the plain runloop: the
+    // provider does not need AppKit, and touching NSApplication with no window
+    // server is fatal rather than merely useless.
+    if wantsUI && AppHost.hasWindowServer {
+        Log.info("untofu running — \(cache.entries.count) face(s) cached")
+        AppHost.run(provider: provider)
+    }
+    Log.info("untofu running — \(cache.entries.count) face(s) cached, no interface")
     provider.run()
 
 case "install":
@@ -152,6 +186,11 @@ case "status":
         + "(`untofu local` to see them)")
     print("unresolved: \(cache.unresolvedNames.count) name(s) in negative cache")
     print("browsers:   cache reads only, no fetching (--fetch-for-browsers to change)")
+    print("suppressed: \(preferences.value(\.suppressedNames).count) name(s) you asked not to hear about")
+    let updatePolicy = preferences.value(\.updateChecksAllowed)
+        ? "allowed, weekly" : "only when you ask"
+    print("updates:    \(updatePolicy)"
+        + (preferences.value(\.updateOfferMade) ? "" : " (you have not been asked yet)"))
     if !hookAvailable { exit(3) }
 
 case "scan":
@@ -309,6 +348,40 @@ case "local":
     }
     print("These are served to any application that asks. `--no-local` turns that off.")
 
+case "update":
+    switch Updater.check() {
+    case .upToDate(let current):
+        print("untofu \(current) is the latest version.")
+    case .updateAvailable(let latest, let current, let notes):
+        print("untofu \(latest) is available. You have \(current).")
+        print("  \(Updater.releasesPage.absoluteString)")
+        if let notes { print("\n\(notes)") }
+    case .failed(let why):
+        FileHandle.standardError.write(Data("could not check for updates: \(why)\n".utf8))
+        exit(1)
+    }
+    preferences.update { $0.lastUpdateCheck = Date() }
+
+case "suppressed":
+    let quiet = preferences.value(\.suppressedNames)
+    if quiet.isEmpty {
+        print("Nothing suppressed. untofu will tell you about every font it cannot find.")
+    } else {
+        for name in quiet.sorted() { print("  \(name)") }
+        print("\(quiet.count) name(s). `untofu unsuppress` to hear about them again.")
+    }
+
+case "unsuppress":
+    if positional.count > 1 {
+        let clearing = Set(positional.dropFirst().map { $0.lowercased() })
+        preferences.update { $0.suppressedNames.removeAll { clearing.contains($0) } }
+        print("Will report \(positional.dropFirst().joined(separator: ", ")) again.")
+    } else {
+        let count = preferences.value(\.suppressedNames).count
+        preferences.unsuppressAll()
+        print(count == 0 ? "Nothing was suppressed." : "Cleared \(count) suppressed name(s).")
+    }
+
 case "verify":
     let dropped = cache.verify()
     print(dropped == 0 ? "index is clean" : "dropped \(dropped) stale entr\(dropped == 1 ? "y" : "ies")")
@@ -320,12 +393,36 @@ case "notify-test":
     print("Posted a sample banner. If nothing appeared, check System Settings > "
         + "Notifications > Script Editor — banners posted this way are attributed there.")
 
+case "dialog-snapshot":
+    // Not in the usage text: a development aid for reviewing the panel's layout
+    // without needing a Screen Recording grant to photograph it.
+    let snapNames = positional.count > 2 ? Array(positional[2...]) : ["Aptos Display"]
+    let snapDir = URL(fileURLWithPath: positional.count > 1 ? positional[1] : ".")
+    // finishLaunching, or the window never goes through a real display pass and
+    // the snapshot comes back with the link buttons and nothing else.
+    let snapApp = NSApplication.shared
+    snapApp.setActivationPolicy(.accessory)
+    snapApp.finishLaunching()
+    for (suffix, appearance) in [("light", NSAppearance.Name.aqua),
+                                 ("dark", NSAppearance.Name.darkAqua)] {
+        MissPanel(names: snapNames, requester: "Keynote", requesterPID: nil,
+                  preferences: preferences)
+            .snapshot(to: snapDir.appendingPathComponent("panel-\(suffix).png"),
+                      appearance: appearance)
+    }
+    print("wrote panel-light.png and panel-dark.png to \(snapDir.path)")
+
 case "dialog-test":
-    let reporter = UnresolvedReporter()
-    reporter.record(psName: positional.count > 1 ? positional[1] : "HelveticaNeueLTPro-Bd")
+    // Needs the same AppKit host the agent runs under, or there is no runloop
+    // for the panel to live on and nothing appears.
+    let reporter = UnresolvedReporter(preferences: preferences)
+    reporter.record(psName: positional.count > 1 ? positional[1] : "HelveticaNeueLTPro-Bd",
+                    requester: "Keynote", pid: nil)
     if positional.count > 2 { reporter.record(psName: positional[2]) }
-    // The reporter debounces, then blocks on the dialog; hold the process open.
-    Thread.sleep(forTimeInterval: TimeInterval(600))
+    let host = NSApplication.shared
+    host.setActivationPolicy(.regular)
+    host.activate(ignoringOtherApps: true)
+    host.run()
 
 default:
     usage()

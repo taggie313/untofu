@@ -17,6 +17,18 @@ BIN=./.build/debug/untofu
 CACHE="$HOME/Library/Application Support/untofu"
 PASS=0; FAIL=0
 
+# Several sections wipe the cache directory, and the user's preferences live in
+# it — which choices they made about update checks, which fonts they asked never
+# to hear about again. Running the tests must not quietly reset those.
+PREFS_BACKUP=$(mktemp -d)/preferences.json
+[ -f "$CACHE/preferences.json" ] && cp "$CACHE/preferences.json" "$PREFS_BACKUP"
+restore_prefs() {
+  if [ -f "$PREFS_BACKUP" ]; then
+    mkdir -p "$CACHE" && cp "$PREFS_BACKUP" "$CACHE/preferences.json"
+  fi
+}
+trap restore_prefs EXIT
+
 ok()   { echo "  PASS  $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL  $1"; FAIL=$((FAIL+1)); }
 check(){ if [ "$1" = "$2" ]; then ok "$3"; else bad "$3 (expected '$2', got '$1')"; fi; }
@@ -228,7 +240,7 @@ if [ "${1:-}" = "--with-keynote" ]; then
   echo
   echo "== Keynote end-to-end =="
   SCRATCH=$(mktemp -d)
-  trap 'rm -rf "$SCRATCH"' EXIT
+  trap 'rm -rf "$SCRATCH"; restore_prefs' EXIT
   rm -rf "$CACHE"
 
   curl -sL -o "$SCRATCH/Lora.ttf" \
@@ -261,7 +273,7 @@ APPLESCRIPT
   # fighting the AppleScript driving Keynote.
   $BIN run --quiet -v > "$SCRATCH/daemon.log" 2>&1 &
   DAEMON=$!
-  trap 'kill $DAEMON 2>/dev/null; rm -rf "$SCRATCH"' EXIT
+  trap 'kill $DAEMON 2>/dev/null; rm -rf "$SCRATCH"; restore_prefs' EXIT
   sleep 2
 
   # First open misses by design: the fetch is asynchronous so the callback can

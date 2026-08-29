@@ -177,8 +177,11 @@ final class LocalFonts {
         lastScan = (files: fileCount, faces: freshIndex.count, duration: elapsed)
         lock.unlock()
 
-        Log.info("local index: \(freshIndex.count) face(s) from \(fileCount) file(s) "
-               + "in \(String(format: "%.2f", elapsed))s")
+        // Debug, not info: `status`, `explain` and `local` all refresh, and each
+        // printing a line about it buries their actual output. The agent logs
+        // its own startup scan at info, where it is the useful thing to know.
+        Log.debug("local index: \(freshIndex.count) face(s) from \(fileCount) file(s) "
+                + "in \(String(format: "%.2f", elapsed))s")
         return freshIndex.count
     }
 

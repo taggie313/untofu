@@ -21,7 +21,11 @@ final class Notifier {
     static let quietPeriod: TimeInterval = 3.0
 
     private let style: Style
-    private let queue = DispatchQueue(label: "net.elusive.untofu.notify")
+    /// Explicit QoS for the same reason as the unresolved reporter's: inheriting
+    /// `.utility` from the fetch path lets Dispatch coalesce this debounce timer
+    /// into a much later wakeup.
+    private let queue = DispatchQueue(label: "net.elusive.untofu.notify",
+                                      qos: .userInitiated)
     private var pending: [String] = []
     private var apps = Set<String>()
     private var scheduled: DispatchWorkItem?

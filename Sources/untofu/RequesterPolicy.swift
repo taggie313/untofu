@@ -1,3 +1,4 @@
+import AppKit
 import CFontProvider
 import Darwin
 import Foundation
@@ -63,10 +64,26 @@ enum RequesterPolicy {
         return path.isEmpty ? nil : path
     }
 
-    /// Last path component, for logs and notifications.
+    /// What to call the requesting application when telling the user about it.
+    ///
+    /// The executable name is the fallback rather than the answer: plenty of
+    /// applications run their work in a helper whose binary is called something
+    /// nobody would recognise, and "Keynote" is a more useful thing to read than
+    /// the name of the process that happened to lay out the text.
     static func displayName(_ pid: pid_t) -> String? {
+        if let named = NSRunningApplication(processIdentifier: pid)?.localizedName,
+           !named.isEmpty { return named }
         guard let path = executablePath(pid) else { return nil }
         let name = (path as NSString).lastPathComponent
         return name.isEmpty ? nil : name
+    }
+
+    /// Bundle identifier of the requesting application, when it has one.
+    ///
+    /// This is what a miss report carries: it says which application ran into
+    /// the problem without saying anything about where this user keeps their
+    /// software, which the executable path would.
+    static func bundleIdentifier(_ pid: pid_t) -> String? {
+        NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
     }
 }

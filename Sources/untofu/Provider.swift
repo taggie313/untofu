@@ -32,6 +32,10 @@ final class Provider {
     }
 
     func run() { ff_provider_run() }
+
+    /// Registers the source on the current runloop without running it, for a
+    /// caller that runs the main runloop itself.
+    func attach() { ff_provider_attach() }
     func stop() { ff_provider_stop() }
 
     /// The hot path. Runs on the provider's runloop with the requesting
@@ -100,7 +104,9 @@ final class Provider {
             Fetcher.fetch(psName: psName, into: self.cache,
                           observer: Fetcher.Observer(
                               resolved: { [weak self] in self?.notifier?.record(family: $0, app: app) },
-                              unresolved: { [weak self] in self?.reporter?.record(psName: $0) }))
+                              unresolved: { [weak self] in
+                                  self?.reporter?.record(psName: $0, requester: app, pid: pid)
+                              }))
             self.inFlightLock.lock()
             self.inFlight.remove(key)
             self.inFlightLock.unlock()

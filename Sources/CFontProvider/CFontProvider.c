@@ -55,9 +55,18 @@ bool ff_provider_start(FFRequestHandler handler, void *context) {
     return gSource != NULL;
 }
 
+void ff_provider_attach(void) {
+    if (gSource == NULL) return;
+    // Common modes, not default mode. Once this process owns a window, the main
+    // runloop spends time in modal and event-tracking modes, and a source
+    // registered only in the default mode does not fire there. That would mean
+    // every font request arriving while our own dialog is on screen stalls the
+    // asking application until the user clicks something.
+    CFRunLoopAddSource(CFRunLoopGetCurrent(), gSource, kCFRunLoopCommonModes);
+}
+
 void ff_provider_run(void) {
-    if (gSource != NULL)
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), gSource, kCFRunLoopDefaultMode);
+    ff_provider_attach();
     CFRunLoopRun();
 }
 
