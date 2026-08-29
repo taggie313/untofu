@@ -22,6 +22,8 @@ func usage() -> Never {
       untofu list               List cached faces.
       untofu verify             Drop index entries whose file has gone missing.
       untofu policy <pid>       Show how a given process would be treated.
+      untofu explain <PSName>   Show how a font name would be classified, without
+                                fetching anything.
       untofu notify-test        Post a sample notification banner.
       untofu dialog-test        Show the "couldn't find it" dialog.
 
@@ -227,6 +229,20 @@ case "policy":
     print("pid \(pid)")
     print("  \(path)")
     print("  \(decision == .serveFromCacheOnly ? "cache reads only — treated as a browser" : "may fetch")")
+
+case "explain":
+    guard positional.count > 1 else {
+        FileHandle.standardError.write(Data("explain needs a font name, e.g. \"Aptos Display\"\n".utf8))
+        exit(1)
+    }
+    let subject = positional[1]
+    print("name:        \(subject)")
+    print("words:       \(Resolver.familyWords(for: subject).joined(separator: " · "))")
+    print("candidates:  \(Resolver.familyCandidates(for: subject).joined(separator: ", "))")
+    print("display:     \(Resolver.displayFamily(for: subject))")
+    print("proprietary: \(Resolver.isKnownProprietary(subject) ? "yes — will not be fetched or reported" : "no")")
+    print("cached:      \(cache.path(for: subject) ?? "no")")
+    print("retry:       \(cache.shouldAttempt(subject) ? "allowed" : "suppressed, failed within the last 6h")")
 
 case "verify":
     let dropped = cache.verify()

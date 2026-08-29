@@ -23,6 +23,22 @@ enum GoogleFonts {
     ///
     /// Asking instead "is this a family the catalogue actually has?" is exact,
     /// and costs a handful of requests once a week rather than one per guess.
+    /// The catalogue as last written to disk, without the freshness check and
+    /// without ever reaching the network. Returns nil when it has never been
+    /// fetched.
+    ///
+    /// Callers that only want to ask "is this plausibly a real family?" use this
+    /// rather than `knownFamilySlugs()`, which blocks on GitHub when the cache
+    /// has expired. A slightly stale catalogue is a perfectly good answer to
+    /// that question; a surprise network round trip is not.
+    static func cachedFamilySlugs() -> Set<String>? {
+        let cacheFile = Cache.root.appendingPathComponent("families.json")
+        guard let data = try? Data(contentsOf: cacheFile),
+              let cached = try? JSONDecoder().decode(FamilyCache.self, from: data)
+        else { return nil }
+        return Set(cached.slugs)
+    }
+
     static func knownFamilySlugs() -> Set<String> {
         let cacheFile = Cache.root.appendingPathComponent("families.json")
         if let data = try? Data(contentsOf: cacheFile),

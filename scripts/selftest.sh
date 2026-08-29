@@ -70,6 +70,41 @@ fi
 check "$($BIN list | grep -c 'calibri')" "0" "proprietary family is never cached"
 
 echo
+echo "== classification =="
+# The whole reason this section exists: opening a PowerPoint deck asks for both
+# "Aptos" and "Aptos Display". The first matched the proprietary set and was
+# dropped silently, as intended. The second slugged to "aptosdisplay", missed the
+# set by one word, went to the network and popped a dialog telling the user to go
+# buy a font. Every sub-family escaped the same way.
+proprietary(){ $BIN explain "$1" | grep -c '^proprietary: yes'; }
+for name in "Aptos Display" "Aptos Narrow" "AptosSerif-Bold" "Segoe UI Semibold" \
+            "Cambria Math" "Arial Unicode MS"; do
+  check "$(proprietary "$name")" "1" "suppresses the sub-family '$name'"
+done
+
+check "$(proprietary 'Playfair Display')" "0" "does not suppress an ordinary two-word family"
+
+# The catalogue veto. "Courier Prime" is a genuine Google family that starts with
+# a proprietary one, so it is the case a naive prefix match gets wrong. Planted
+# rather than downloaded: the assertion is about the veto, not about GitHub being
+# reachable, and the real catalogue is wiped by the rm -rf above anyway.
+FAMILIES="$CACHE/families.json"
+mkdir -p "$CACHE"
+# The timestamp is not read back: the veto deliberately ignores the freshness
+# check so it can never trigger a network fetch of its own.
+echo '{"fetched":0,"slugs":["courierprime","playfairdisplay","librebaskerville"]}' > "$FAMILIES"
+check "$(proprietary 'Courier Prime')"     "0" "catalogue vetoes suppression of Courier Prime"
+check "$(proprietary 'Libre Baskerville')" "0" "catalogue vetoes suppression of Libre Baskerville"
+check "$(proprietary 'Aptos Display')"     "1" "a sub-family the catalogue lacks is still suppressed"
+
+# A cold install has no catalogue to consult. Suppressing on a guess would
+# silently disable the one thing this tool does, so the word rule stands down —
+# except for the handful of sub-families named outright in the set.
+rm -f "$FAMILIES"
+check "$(proprietary 'Courier Prime')" "0" "with no catalogue, does not suppress Courier Prime either"
+check "$(proprietary 'Aptos Display')" "1" "with no catalogue, still suppresses Aptos Display"
+
+echo
 echo "== concurrency =="
 rm -rf "$CACHE"
 # Each fetch stages downloads in its own scratch directory. A shared one is a
