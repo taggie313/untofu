@@ -87,7 +87,8 @@ case "run":
     let wantsUI = !quiet || !noDialog
     let provider = Provider(cache: cache, local: local,
                             notifier: quiet ? nil : Notifier(style: style),
-                            reporter: noDialog ? nil : UnresolvedReporter(preferences: preferences),
+                            reporter: noDialog ? nil : UnresolvedReporter(preferences: preferences,
+                                                                          local: local),
                             fetchForBrowsers: flags.contains("--fetch-for-browsers"))
     guard provider.start() else {
         Log.warn("""
@@ -314,6 +315,9 @@ case "explain":
     explainLocal.refresh()
     if let path = explainLocal.path(for: subject) {
         print("local:       \(explainLocal.origin(ofPath: path) ?? "on disk") — \(path)")
+    } else if let cousin = explainLocal.relative(of: subject) {
+        print("local:       this exact name is not here, but \(cousin) is — "
+            + "which is what a miss report would say")
     } else {
         print("local:       not found on this Mac outside the installed font library")
     }

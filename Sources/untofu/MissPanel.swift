@@ -56,6 +56,7 @@ final class MissPanel: NSObject, NSWindowDelegate {
     private let requester: String?
     private let requesterPID: pid_t?
     private let preferences: Preferences
+    private let local: LocalFonts?
     /// Held so the panel is not deallocated the moment `present` returns.
     private static var onScreen: Set<MissPanel> = []
 
@@ -68,11 +69,12 @@ final class MissPanel: NSObject, NSWindowDelegate {
     private var primary: String { names[0] }
 
     init(names: [String], requester: String?, requesterPID: pid_t?,
-         preferences: Preferences) {
+         preferences: Preferences, local: LocalFonts? = nil) {
         self.names = names
         self.requester = requester
         self.requesterPID = requesterPID
         self.preferences = preferences
+        self.local = local
         super.init()
     }
 
@@ -430,9 +432,13 @@ final class MissPanel: NSObject, NSWindowDelegate {
     // MARK: - Phoning home, only when asked
 
     @objc private func report() {
-        let found = LocalFonts().path(for: primary) != nil
+        // A relative on disk, not the name itself: by now the exact name has
+        // already failed every lookup, so asking after it would answer no every
+        // time. Whether the *family* was here all along is the question worth
+        // sending.
+        let relative = local?.relative(of: primary)
         let report = MissReport.build(font: primary, requesterPID: requesterPID,
-                                      foundLocally: found)
+                                      foundLocally: relative != nil)
 
         // Shown before it is sent, in full. A button that quietly transmits
         // something is a different feature from one that offers to.

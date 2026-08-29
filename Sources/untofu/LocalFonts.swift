@@ -130,6 +130,27 @@ final class LocalFonts {
             .sorted { $0.psName < $1.psName }
     }
 
+    /// The name of a face from the same family, when the exact name asked for
+    /// was not found but a relative was.
+    ///
+    /// This is what makes a miss report worth reading. By the time the panel
+    /// appears the exact name has already failed every lookup, so asking "is
+    /// this exact name on disk" would answer no every time and say nothing. The
+    /// useful question is the other one: did we have the family all along and
+    /// fail to connect the request to it? "Aptos Display is missing, but Aptos
+    /// is sitting in Excel's bundle" is a resolver bug, and an entirely
+    /// different thing from a font nobody publishes.
+    func relative(of psName: String) -> String? {
+        guard let first = Resolver.familyWords(for: psName).first, !first.isEmpty else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        // Sorted, so the answer does not change between runs for no reason.
+        for name in index.keys.sorted() {
+            guard name.lowercased() != psName.lowercased() else { continue }
+            if Resolver.familyWords(for: name).first == first { return name }
+        }
+        return nil
+    }
+
     /// Walks the stashes and parses what it finds. Blocking — callers run it on a
     /// background queue, never from the provider callback.
     @discardableResult

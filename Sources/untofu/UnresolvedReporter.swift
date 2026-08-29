@@ -19,6 +19,10 @@ final class UnresolvedReporter {
     static let quietPeriod: TimeInterval = 4.0
 
     private let preferences: Preferences
+    /// The provider's live index, not one of our own: a freshly constructed
+    /// LocalFonts has an empty dictionary until something calls refresh(), so
+    /// building one here would answer "no" to every question asked of it.
+    private let local: LocalFonts?
     /// Explicit QoS, and it matters. Without it the queue inherits from whoever
     /// calls `record`, which is the fetch path at `.utility` — and Dispatch
     /// grants low-QoS `asyncAfter` timers generous leeway to coalesce wakeups.
@@ -31,8 +35,9 @@ final class UnresolvedReporter {
     private var requesterPID: pid_t?
     private var scheduled: DispatchWorkItem?
 
-    init(preferences: Preferences) {
+    init(preferences: Preferences, local: LocalFonts? = nil) {
         self.preferences = preferences
+        self.local = local
     }
 
     func record(psName: String, requester: String? = nil, pid: pid_t? = nil) {
@@ -64,9 +69,10 @@ final class UnresolvedReporter {
 
         Log.info("unresolved panel: \(names.joined(separator: ", "))")
         let preferences = self.preferences
+        let local = self.local
         DispatchQueue.main.async {
             MissPanel(names: names, requester: who, requesterPID: pid,
-                      preferences: preferences).present()
+                      preferences: preferences, local: local).present()
         }
     }
 }
