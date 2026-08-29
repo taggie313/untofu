@@ -25,6 +25,16 @@ final class Preferences {
 
         var lastUpdateCheck: Date?
         var lastSeenVersion: String?
+
+        /// Whether to index font stashes that macOS gates behind a permission
+        /// prompt — Downloads, and the Office and Adobe user containers.
+        ///
+        /// Off. Reaching into them from a background agent makes macOS
+        /// interrupt with "untofu would like to access files in your Downloads
+        /// folder", which is precisely the kind of unexplained dialog this tool
+        /// exists to remove. `untofu folders --allow` turns it on in the
+        /// foreground, where the prompt answers something the user just did.
+        var searchPersonalFolders = false
     }
 
     private let lock = NSLock()

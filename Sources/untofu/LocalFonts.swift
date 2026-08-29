@@ -31,6 +31,16 @@ final class LocalFonts {
         /// Adobe hides its synced fonts in `.w/` and `.r/`, so hidden entries
         /// cannot be skipped globally — only where they are known to be noise.
         let includeHidden: Bool
+        /// Whether reading here makes macOS interrupt the user for permission.
+        ///
+        /// Downloads, and anything under another application's container, are
+        /// gated by TCC. A background font agent reaching into them uninvited
+        /// produces exactly the dialog this whole tool exists to remove — one
+        /// the user did not ask for and cannot make sense of, from a process
+        /// with no window and no obvious reason to want their Downloads folder.
+        /// So these are off unless the user turns them on, deliberately, in the
+        /// foreground, where the prompt is an answer to something they just did.
+        let needsPermission: Bool
     }
 
     private static let fontExtensions: Set<String> = ["ttf", "otf", "ttc", "otc", "dfont"]
@@ -46,7 +56,15 @@ final class LocalFonts {
     ]
     private static let excludedFragments = ["officefontspreview", "fontpreview"]
 
-    static func stashes() -> [Stash] {
+    /// Everywhere worth looking.
+    ///
+    /// `includingPersonal` decides whether the TCC-gated ones come along. The
+    /// default is no, and that is a deliberate trade: the Office cloud cache is
+    /// where "Aptos Display" lands once PowerPoint fetches it, and Adobe's
+    /// CoreSync directory is the only place activated Adobe Fonts exist — both
+    /// genuinely useful, and neither worth a permission dialog the user did not
+    /// ask for from a process they cannot see.
+    static func stashes(includingPersonal personal: Bool = false) -> [Stash] {
         let home = FileManager.default.homeDirectoryForCurrentUser
         var found: [Stash] = []
 
@@ -54,48 +72,56 @@ final class LocalFonts {
         // two or three times over. Enumerating them all is cheaper than deciding
         // which bundle is canonical, and the scoring in refresh() collapses the
         // duplicates to one file per name anyway.
+        //
+        // Inside /Applications, so no permission is involved: this is the bulk
+        // of what the feature delivers and it costs the user nothing.
         let apps = (try? FileManager.default.contentsOfDirectory(
             atPath: "/Applications")) ?? []
         for app in apps.sorted() where app.hasPrefix("Microsoft ") && app.hasSuffix(".app") {
             found.append(Stash(label: "Microsoft Office",
                                url: URL(fileURLWithPath: "/Applications/\(app)/Contents/Resources/DFonts"),
-                               depth: 1, includeHidden: false))
+                               depth: 1, includeHidden: false, needsPermission: false))
         }
 
-        // Where Office puts a font it downloaded rather than shipped. This is the
-        // one that closes the loop on the failure that prompted all of this: open
-        // the deck in PowerPoint once and "Aptos Display" lands here, after which
-        // every other application on the Mac can have it too.
-        found.append(Stash(label: "Office cloud fonts",
-                           url: home.appendingPathComponent(
-                               "Library/Group Containers/UBF8T346G9.Office/FontCache"),
-                           depth: 4, includeHidden: false))
-
-        // Adobe Fonts activated through Creative Cloud, stored as hidden files
-        // with numeric names. The names on disk say nothing; the `name` table says
-        // everything, which is why this works at all.
-        for root in ["Library/Application Support/Adobe/CoreSync/plugins/livetype",
-                     "Library/Application Support/Adobe/Fonts"] {
-            found.append(Stash(label: "Adobe Creative Cloud",
-                               url: home.appendingPathComponent(root),
-                               depth: 3, includeHidden: true))
-            found.append(Stash(label: "Adobe Creative Cloud",
-                               url: URL(fileURLWithPath: "/\(root)"),
-                               depth: 3, includeHidden: true))
-        }
-
+        // Machine-wide rather than per-user, so not behind TCC.
+        found.append(Stash(label: "Adobe (shared)",
+                           url: URL(fileURLWithPath: "/Library/Application Support/Adobe/Fonts"),
+                           depth: 3, includeHidden: true, needsPermission: false))
         found.append(Stash(label: "Apple bundled fonts",
                            url: URL(fileURLWithPath: "/Library/Application Support/Apple/Fonts"),
-                           depth: 2, includeHidden: false))
+                           depth: 2, includeHidden: false, needsPermission: false))
 
-        // The "I downloaded the font and never double-clicked it" case, which is
-        // common enough to be worth one shallow pass. Deliberately shallow: this
-        // is a directory full of unrelated things, not a font library.
-        found.append(Stash(label: "Downloads",
-                           url: home.appendingPathComponent("Downloads"),
-                           depth: 2, includeHidden: false))
+        if personal {
+            // Where Office puts a font it downloaded rather than shipped — the
+            // one that closes the loop on the failure that started all of this.
+            found.append(Stash(label: "Office cloud fonts",
+                               url: home.appendingPathComponent(
+                                   "Library/Group Containers/UBF8T346G9.Office/FontCache"),
+                               depth: 4, includeHidden: false, needsPermission: true))
+
+            // Adobe Fonts activated through Creative Cloud, stored as hidden
+            // files with numeric names. The names on disk say nothing; the
+            // `name` table says everything, which is why this works at all.
+            found.append(Stash(label: "Adobe Creative Cloud",
+                               url: home.appendingPathComponent(
+                                   "Library/Application Support/Adobe/CoreSync/plugins/livetype"),
+                               depth: 3, includeHidden: true, needsPermission: true))
+
+            // The "I downloaded the font and never double-clicked it" case.
+            // Deliberately shallow: a directory full of unrelated things, not a
+            // font library.
+            found.append(Stash(label: "Downloads",
+                               url: home.appendingPathComponent("Downloads"),
+                               depth: 2, includeHidden: false, needsPermission: true))
+        }
 
         return found.filter { FileManager.default.fileExists(atPath: $0.url.path) }
+    }
+
+    /// The gated locations, whether or not they are currently enabled — so
+    /// `untofu folders` can name what is being passed up.
+    static var personalStashes: [Stash] {
+        stashes(includingPersonal: true).filter(\.needsPermission)
     }
 
     // MARK: - Index
@@ -196,7 +222,7 @@ final class LocalFonts {
     /// modification date, so that cost is paid once per file ever rather than
     /// once per login.
     @discardableResult
-    func refresh(rebuild: Bool = false) -> Int {
+    func refresh(rebuild: Bool = false, includingPersonal personal: Bool = false) -> Int {
         let started = Date()
         let previous = rebuild ? [:] : LocalFonts.loadSnapshot()
 
@@ -214,7 +240,7 @@ final class LocalFonts {
         // "Calibri" is satisfiable by Calibrii.ttf and the document comes out in
         // italic. Ties fall back to stash order, so an Office bundle beats a
         // stray download.
-        for (rank, stash) in LocalFonts.stashes().enumerated() {
+        for (rank, stash) in LocalFonts.stashes(includingPersonal: personal).enumerated() {
             for file in LocalFonts.fontFiles(in: stash) {
                 fileCount += 1
 

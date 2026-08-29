@@ -29,6 +29,8 @@ func usage() -> Never {
       untofu local              List fonts found on this Mac that no application
                                 has registered. --rebuild re-reads every file
                                 rather than trusting the stored index.
+      untofu folders            Show which font locations are searched, and turn
+                                the permission-gated ones on with --allow.
       untofu update             Check now whether a newer untofu exists.
       untofu suppressed         List fonts you asked not to be told about.
       untofu unsuppress [name]  Start being told about them again. With no name,
@@ -56,6 +58,11 @@ func usage() -> Never {
       activated Adobe Fonts into a hidden CoreSync directory, and Office caches
       fonts it downloads on demand. untofu indexes those at startup and serves
       them, which is the only path fast enough to fix the document that asked.
+
+      Only locations macOS does not gate are searched by default. Office's
+      cloud cache, Adobe's CoreSync directory and ~/Downloads sit behind a
+      permission prompt, and a background agent provoking one unasked is the
+      sort of dialog untofu exists to remove. `untofu folders --allow` opts in.
 
       Whether a font bundled with one application may be used by another is a
       question for its licence, not for this tool. `--no-local` turns it off, and
@@ -112,7 +119,7 @@ case "run":
     let hangup = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .global())
     hangup.setEventHandler {
         cache.reload()
-        local?.refresh()
+        local?.refresh(includingPersonal: preferences.value(\.searchPersonalFolders))
         Log.info("index reloaded — \(cache.entries.count) face(s)")
     }
     hangup.resume()
@@ -123,7 +130,7 @@ case "run":
     // shipped before the local index existed.
     if let local {
         DispatchQueue.global(qos: .utility).async {
-            local.refresh()
+            local.refresh(includingPersonal: preferences.value(\.searchPersonalFolders))
             if let scan = local.summary {
                 // The read count is the interesting half. A first run reads
                 // 1.35 GB and takes half a minute; every later one reads nothing
@@ -191,11 +198,13 @@ case "status":
     }
     print("cache:      \(cache.entries.count) face(s) in \(Cache.root.path)")
     let statusLocal = LocalFonts()
-    statusLocal.refresh()
+    statusLocal.refresh(includingPersonal: preferences.value(\.searchPersonalFolders))
     print("local:      \(statusLocal.faceCount) unregistered face(s) on this Mac "
         + "(`untofu local` to see them)")
     print("unresolved: \(cache.unresolvedNames.count) name(s) in negative cache")
     print("browsers:   cache reads only, no fetching (--fetch-for-browsers to change)")
+    print("folders:    \(preferences.value(\.searchPersonalFolders) ? "including" : "excluding") "
+        + "Downloads and app containers (`untofu folders`)")
     print("suppressed: \(preferences.value(\.suppressedNames).count) name(s) you asked not to hear about")
     let updatePolicy = preferences.value(\.updateChecksAllowed)
         ? "allowed, weekly" : "only when you ask"
@@ -321,7 +330,7 @@ case "explain":
     print("proprietary: \(Resolver.isKnownProprietary(subject) ? "yes — will not be fetched or reported" : "no")")
     print("cached:      \(cache.path(for: subject) ?? "no")")
     let explainLocal = LocalFonts()
-    explainLocal.refresh()
+    explainLocal.refresh(includingPersonal: preferences.value(\.searchPersonalFolders))
     if let path = explainLocal.path(for: subject) {
         print("local:       \(explainLocal.origin(ofPath: path) ?? "on disk") — \(path)")
     } else if let cousin = explainLocal.relative(of: subject) {
@@ -334,8 +343,9 @@ case "explain":
 
 case "local":
     let inventory = LocalFonts()
-    let stashes = LocalFonts.stashes()
-    inventory.refresh(rebuild: flags.contains("--rebuild"))
+    let searchPersonal = preferences.value(\.searchPersonalFolders)
+    let stashes = LocalFonts.stashes(includingPersonal: searchPersonal)
+    inventory.refresh(rebuild: flags.contains("--rebuild"), includingPersonal: searchPersonal)
 
     print("Looked in:")
     for stash in stashes { print("  \(stash.label.padding(toLength: 22, withPad: " ", startingAt: 0))\(stash.url.path)") }
@@ -367,6 +377,55 @@ case "local":
         }
     }
     print("These are served to any application that asks. `--no-local` turns that off.")
+
+case "folders":
+    let gated = LocalFonts.personalStashes
+    let on = preferences.value(\.searchPersonalFolders)
+
+    if flags.contains("--allow") || flags.contains("--deny") {
+        let allow = flags.contains("--allow")
+        preferences.update { $0.searchPersonalFolders = allow }
+        if allow {
+            print("Searching them from now on. macOS will ask permission once per")
+            print("location — that is what the prompts are, and answering them here")
+            print("is why this command exists rather than the agent asking on its own.\n")
+            let warmed = LocalFonts()
+            warmed.refresh(rebuild: true, includingPersonal: true)
+            print("\(warmed.faceCount) face(s) indexed.")
+            LaunchAgent.reloadRunningAgent()
+        } else {
+            print("Leaving them alone. Re-indexing without them…")
+            let warmed = LocalFonts()
+            warmed.refresh(rebuild: true, includingPersonal: false)
+            print("\(warmed.faceCount) face(s) indexed.")
+            LaunchAgent.reloadRunningAgent()
+        }
+        break
+    }
+
+    print("Searched with no permission needed:")
+    for stash in LocalFonts.stashes(includingPersonal: false) {
+        print("  \(stash.url.path)")
+    }
+    print("")
+    print(on ? "Also searched (you allowed these):" : "NOT searched — macOS gates these behind a permission prompt:")
+    if gated.isEmpty {
+        print("  (none of them exist on this Mac)")
+    } else {
+        for stash in gated { print("  \(stash.url.path)") }
+    }
+    print("")
+    if on {
+        print("`untofu folders --deny` stops searching them.")
+    } else {
+        print("These are where Office caches fonts it downloads on demand, where")
+        print("Creative Cloud keeps activated Adobe Fonts, and where a font you")
+        print("downloaded but never installed sits. Worth having — but reaching")
+        print("into them makes macOS interrupt you, and a background agent doing")
+        print("that unasked is the sort of dialog untofu exists to remove.")
+        print("")
+        print("  untofu folders --allow    search them; answer the prompts once")
+    }
 
 case "update":
     switch Updater.check() {

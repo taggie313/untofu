@@ -126,7 +126,13 @@ rm -rf "$CACHE"; mkdir -p "$CACHE/fonts"
 curl -sL -o "$LOCALSRC" \
   "https://raw.githubusercontent.com/google/fonts/main/ofl/lora/Lora%5Bwght%5D.ttf"
 PLANTED="$HOME/Downloads/untofu-selftest-Lora.ttf"
-if [ -s "$LOCALSRC" ]; then
+# Downloads is gated by TCC, and the tests must never be the thing that makes
+# macOS interrupt someone. Run this only where the user has already opted in.
+PERSONAL=$($BIN folders | grep -c '^Also searched')
+if [ "$PERSONAL" != "1" ]; then
+  echo "  SKIP  Downloads stash tests -- 'untofu folders --allow' not enabled;"
+  echo "        running them would fire a permission prompt at you"
+elif [ -s "$LOCALSRC" ]; then
   cp "$LOCALSRC" "$PLANTED"
   check "$($BIN explain Lora-Regular | grep -c '^local: *Downloads')" "1" \
         "finds an uninstalled font sitting in Downloads"
@@ -138,6 +144,15 @@ if [ -s "$LOCALSRC" ]; then
 else
   echo "  SKIP  Downloads stash test (could not download a font to plant)"
 fi
+
+# The default must reach nothing that prompts. This is the assertion that keeps
+# a future stash from quietly reintroducing the interruption.
+check "$($BIN folders | sed -n '/^Searched with no permission needed:/,/^$/p' \
+          | grep -cE '/Users/|Group Containers|Downloads')" "0" \
+      "nothing searched by default is behind a permission prompt"
+check "$($BIN local --rebuild 2>/dev/null | sed -n '/Looked in:/,/^$/p' \
+          | grep -cE 'Downloads|Group Containers|CoreSync')" "0" \
+      "and a default scan opens none of those directories"
 
 # The index is cached against size and modification date. Reading every file
 # every time was the original shape, chosen on a warm benchmark of 0.13s — the
@@ -164,7 +179,7 @@ rm -f "$CACHE/.idx-rebuild" "$CACHE/.idx-reused"
 
 # A font that changed underneath us must not be served from a stale parse.
 STALE="$HOME/Downloads/untofu-selftest-stale.ttf"
-if [ -s "$LOCALSRC" ]; then
+if [ "$PERSONAL" = "1" ] && [ -s "$LOCALSRC" ]; then
   cp "$LOCALSRC" "$STALE"
   $BIN local >/dev/null 2>&1                      # pick it up once
   touch "$STALE"
