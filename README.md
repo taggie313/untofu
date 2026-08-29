@@ -52,6 +52,11 @@ service is loaded and `untofu status` reports each of them.
 untofu status             hook availability, agent state, cache size
 untofu fetch <PSName>     resolve and cache one name now
 untofu list               list cached faces
+untofu local              fonts on this Mac that no application has registered
+untofu explain <PSName>   how a name is classified, without fetching anything
+untofu update             check whether a newer untofu exists
+untofu suppressed         fonts you asked not to be told about
+untofu unsuppress [name]  start being told about them again
 untofu verify             drop index entries whose file has gone missing
 untofu uninstall          stop and remove the agent
 untofu notify-test        post a sample banner
@@ -249,6 +254,59 @@ Run the regression suite with `./scripts/selftest.sh`, or
 `./scripts/selftest.sh --with-keynote` to include the full end-to-end (installs a
 font, authors a deck against it, removes the font, and checks untofu puts it
 back).
+
+### When it cannot help
+
+Some fonts are simply not obtainable, and a silent failure is the one case where
+the user genuinely needs telling: the document has already substituted something
+and nothing on screen explains why. So untofu draws a panel naming the font and
+the application that asked for it, with somewhere to look.
+
+It is a floating panel, not a modal alert — you are in the middle of reading a
+document, and this is a remark about what you are reading rather than a demand
+for the keyboard. Misses are coalesced, so a deck referencing eight private
+corporate fonts produces one panel rather than eight, and "don't tell me about
+this font again" is permanent (`untofu suppressed` lists them, `untofu
+unsuppress` clears them).
+
+Names that could never be found are never reported at all. Opening any Office
+document asks for Calibri, Aptos and Segoe UI; a PDF asks for the base-14. Those
+are matched against a list of families known to be unobtainable and dropped in
+silence, because a dialog about a font you can do nothing about is worse than no
+dialog. The match runs in whole words from the start of the name, so `Aptos
+Display` and `Segoe UI Semibold` are caught along with their parents — and the
+google/fonts catalogue gets a veto, so `Courier Prime`, a real family that merely
+begins with an unobtainable one, is not swept up with them.
+
+### Nothing is sent anywhere unless you press something
+
+untofu contacts three servers and only three: google/fonts to fetch a font,
+GitHub's API to look one up, and — if you ask it to — untofu.elusive.net.
+
+**Reporting a miss.** The panel has a *Report this…* button. It shows the exact
+JSON before sending it:
+
+```json
+{
+  "app": "com.apple.iWork.Keynote",
+  "font": "Aptos Display",
+  "found_locally": false,
+  "macos_version": "26.0.0",
+  "untofu_version": "0.2.1"
+}
+```
+
+No document name, no file path, no user or machine identifier, nothing that ties
+two reports to the same person. `found_locally` is there because a miss where a
+copy *was* on the disk is a different bug from one where nobody publishes the
+font, and only that field tells them apart.
+
+**Update checks.** Off. An update check is a request to a server disclosing that
+this Mac runs this tool, and a font agent has no business making it unasked.
+Every panel has a *Check for Updates* button that runs one check because you
+pressed it, and `untofu update` does the same from the shell. You are asked once,
+90 seconds after first launch, whether it may also happen on its own; declining
+costs nothing but the automatic part. `untofu status` reports which you chose.
 
 ## Limitations
 
