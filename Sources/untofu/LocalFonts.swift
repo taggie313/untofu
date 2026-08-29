@@ -100,10 +100,44 @@ final class LocalFonts {
 
     // MARK: - Index
 
+    /// What was read out of one font file, kept so it need not be read twice.
+    ///
+    /// Keyed by path and validated against size and modification date. A font
+    /// file is immutable in practice — Office ships them inside a signed bundle
+    /// and Adobe writes a new numbered file rather than editing one — so this
+    /// invalidates almost never, and when it does, only that file is re-read.
+    private struct Entry: Codable {
+        let size: Int64
+        let modified: Double
+        let names: [String]
+        let exact: [String]
+        let plainness: Int
+    }
+
+    private struct Snapshot: Codable {
+        /// Bumped when the shape of Entry changes, so an old file on disk is
+        /// discarded wholesale rather than decoded into something wrong.
+        let version: Int
+        let files: [String: Entry]
+    }
+
+    private static let snapshotVersion = 2
+
+    struct Scan {
+        let files: Int
+        let faces: Int
+        let duration: TimeInterval
+        /// Files whose contents had to be read this time.
+        let parsed: Int
+        /// Bytes read to do it. This is the number that matters: it is what the
+        /// cold start was actually spending its time on.
+        let bytesRead: Int64
+    }
+
     private let lock = NSLock()
     private var index: [String: String] = [:]       // lowercased PostScript name -> absolute path
     private var origins: [String: String] = [:]     // absolute path -> stash label
-    private var lastScan: (files: Int, faces: Int, duration: TimeInterval)?
+    private var lastScan: Scan?
 
     /// Hot path: a dictionary read under a lock, no I/O, same contract as `Cache.path`.
     func path(for psName: String) -> String? {
@@ -119,7 +153,7 @@ final class LocalFonts {
     }
 
     var faceCount: Int { lock.lock(); defer { lock.unlock() }; return index.count }
-    var summary: (files: Int, faces: Int, duration: TimeInterval)? {
+    var summary: Scan? {
         lock.lock(); defer { lock.unlock() }; return lastScan
     }
 
@@ -151,14 +185,28 @@ final class LocalFonts {
         return nil
     }
 
-    /// Walks the stashes and parses what it finds. Blocking — callers run it on a
-    /// background queue, never from the provider callback.
+    /// Walks the stashes and reads what it has not read before. Blocking —
+    /// callers run it on a background queue, never from the provider callback.
+    ///
+    /// Reading every file every time was the original shape, decided on a warm
+    /// benchmark of 0.13s. That was the wrong measurement: these stashes are
+    /// 1.35 GB across ~690 files, and the first run after a boot — the only one
+    /// that matters, since it is the one racing the user's first document —
+    /// measured 34 seconds. The parse results are cached against size and
+    /// modification date, so that cost is paid once per file ever rather than
+    /// once per login.
     @discardableResult
-    func refresh() -> Int {
+    func refresh(rebuild: Bool = false) -> Int {
         let started = Date()
+        let previous = rebuild ? [:] : LocalFonts.loadSnapshot()
+
+        var current: [String: Entry] = [:]
         var freshIndex: [String: String] = [:]
         var freshOrigins: [String: String] = [:]
+        var scores: [String: Int] = [:]
         var fileCount = 0
+        var parsedCount = 0
+        var bytesRead: Int64 = 0
 
         // Best score wins rather than first writer, because several files
         // legitimately answer to the same name and picking wrong is visible:
@@ -166,22 +214,36 @@ final class LocalFonts {
         // "Calibri" is satisfiable by Calibrii.ttf and the document comes out in
         // italic. Ties fall back to stash order, so an Office bundle beats a
         // stray download.
-        var scores: [String: Int] = [:]
-
         for (rank, stash) in LocalFonts.stashes().enumerated() {
             for file in LocalFonts.fontFiles(in: stash) {
                 fileCount += 1
-                guard let parsed = FontFile.read(file) else { continue }
-                freshOrigins[file.path] = stash.label
-                for name in parsed.postScriptNames {
+
+                let entry: Entry
+                if let cached = previous[file.url.path],
+                   cached.size == file.size, cached.modified == file.modified {
+                    entry = cached
+                } else {
+                    guard let parsed = FontFile.read(file.url) else { continue }
+                    entry = Entry(size: file.size, modified: file.modified,
+                                  names: Array(parsed.postScriptNames),
+                                  exact: Array(parsed.exactNames),
+                                  plainness: parsed.plainness)
+                    parsedCount += 1
+                    bytesRead += file.size
+                }
+
+                current[file.url.path] = entry
+                freshOrigins[file.url.path] = stash.label
+
+                let exact = Set(entry.exact)
+                for name in entry.names {
                     let key = name.lowercased()
                     // A name that identifies this exact face beats one shared
                     // with every sibling, whatever their weights.
-                    let score = (parsed.exactNames.contains(name) ? 10_000 : parsed.plainness)
-                              - rank
+                    let score = (exact.contains(name) ? 10_000 : entry.plainness) - rank
                     if score > (scores[key] ?? Int.min) {
                         scores[key] = score
-                        freshIndex[key] = file.path
+                        freshIndex[key] = file.url.path
                     }
                 }
             }
@@ -189,38 +251,81 @@ final class LocalFonts {
 
         // Drop origins for files that contributed no name, so `untofu local`
         // does not claim to have indexed something it discarded.
-        freshOrigins = freshOrigins.filter { freshIndex.values.contains($0.key) }
+        let served = Set(freshIndex.values)
+        freshOrigins = freshOrigins.filter { served.contains($0.key) }
 
         let elapsed = Date().timeIntervalSince(started)
         lock.lock()
         index = freshIndex
         origins = freshOrigins
-        lastScan = (files: fileCount, faces: freshIndex.count, duration: elapsed)
+        lastScan = Scan(files: fileCount, faces: freshIndex.count, duration: elapsed,
+                        parsed: parsedCount, bytesRead: bytesRead)
         lock.unlock()
 
-        // Debug, not info: `status`, `explain` and `local` all refresh, and each
-        // printing a line about it buries their actual output. The agent logs
-        // its own startup scan at info, where it is the useful thing to know.
+        // Written even when nothing was parsed: files disappear too, and a
+        // snapshot still naming them would keep them alive forever.
+        LocalFonts.saveSnapshot(current)
+
         Log.debug("local index: \(freshIndex.count) face(s) from \(fileCount) file(s) "
-                + "in \(String(format: "%.2f", elapsed))s")
+                + "in \(String(format: "%.2f", elapsed))s "
+                + "(\(parsedCount) read, \(fileCount - parsedCount) reused)")
         return freshIndex.count
     }
 
-    private static func fontFiles(in stash: Stash) -> [URL] {
-        var out: [URL] = []
+    // MARK: - Snapshot
+
+    static var snapshotURL: URL {
+        Cache.root.appendingPathComponent("local-index.json")
+    }
+
+    private static func loadSnapshot() -> [String: Entry] {
+        guard let data = try? Data(contentsOf: snapshotURL),
+              let decoded = try? JSONDecoder().decode(Snapshot.self, from: data),
+              decoded.version == snapshotVersion
+        else { return [:] }
+        return decoded.files
+    }
+
+    private static func saveSnapshot(_ files: [String: Entry]) {
+        let encoder = JSONEncoder()
+        // Not pretty-printed: this is ~690 entries of machine-read bookkeeping,
+        // and the readable view of it is `untofu local`.
+        guard let data = try? encoder.encode(Snapshot(version: snapshotVersion, files: files))
+        else { return }
+        try? FileManager.default.createDirectory(
+            at: Cache.root, withIntermediateDirectories: true)
+        // Atomic: several processes refresh — the agent, and any CLI command
+        // that reports on the index — and a half-written file read by the next
+        // one would send it back to re-reading all 1.35 GB.
+        try? data.write(to: snapshotURL, options: .atomic)
+    }
+
+    /// A font file, with the two facts needed to tell whether it has changed.
+    ///
+    /// Size and date come from the directory enumeration rather than a separate
+    /// stat per file: they are prefetched as resource values, so validating ~690
+    /// cached entries costs one walk and no extra syscalls.
+    private struct Found {
+        let url: URL
+        let size: Int64
+        let modified: Double
+    }
+
+    private static func fontFiles(in stash: Stash) -> [Found] {
+        var out: [Found] = []
         var frontier = [(url: stash.url, depth: 0)]
+        let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
 
         while let current = frontier.popLast() {
             let options: FileManager.DirectoryEnumerationOptions =
                 stash.includeHidden ? [] : [.skipsHiddenFiles]
             let contents = (try? FileManager.default.contentsOfDirectory(
-                at: current.url, includingPropertiesForKeys: [.isDirectoryKey],
+                at: current.url, includingPropertiesForKeys: keys,
                 options: options)) ?? []
 
             for entry in contents {
-                let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?
-                    .isDirectory ?? false
-                if isDirectory {
+                let values = try? entry.resourceValues(forKeys: Set(keys))
+                if values?.isDirectory == true {
                     if current.depth + 1 < stash.depth {
                         frontier.append((url: entry, depth: current.depth + 1))
                     }
@@ -231,7 +336,10 @@ final class LocalFonts {
                 guard !excludedNames.contains(name),
                       !excludedFragments.contains(where: { name.contains($0) })
                 else { continue }
-                out.append(entry)
+                out.append(Found(
+                    url: entry,
+                    size: Int64(values?.fileSize ?? 0),
+                    modified: values?.contentModificationDate?.timeIntervalSince1970 ?? 0))
             }
         }
         return out

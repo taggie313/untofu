@@ -27,7 +27,8 @@ func usage() -> Never {
       untofu explain <PSName>   Show how a font name would be classified, without
                                 fetching anything.
       untofu local              List fonts found on this Mac that no application
-                                has registered.
+                                has registered. --rebuild re-reads every file
+                                rather than trusting the stored index.
       untofu update             Check now whether a newer untofu exists.
       untofu suppressed         List fonts you asked not to be told about.
       untofu unsuppress [name]  Start being told about them again. With no name,
@@ -124,8 +125,16 @@ case "run":
         DispatchQueue.global(qos: .utility).async {
             local.refresh()
             if let scan = local.summary {
+                // The read count is the interesting half. A first run reads
+                // 1.35 GB and takes half a minute; every later one reads nothing
+                // and takes milliseconds, and the log should make plain which
+                // of those just happened.
                 Log.info("local index: \(scan.faces) unregistered face(s) from "
-                       + "\(scan.files) file(s) in \(String(format: "%.2f", scan.duration))s")
+                       + "\(scan.files) file(s) in \(String(format: "%.2f", scan.duration))s "
+                       + (scan.parsed == 0
+                          ? "(all reused, nothing read)"
+                          : "(read \(scan.parsed) file(s), "
+                            + String(format: "%.0f", Double(scan.bytesRead) / 1_048_576) + " MB)"))
             }
         }
     }
@@ -326,7 +335,7 @@ case "explain":
 case "local":
     let inventory = LocalFonts()
     let stashes = LocalFonts.stashes()
-    inventory.refresh()
+    inventory.refresh(rebuild: flags.contains("--rebuild"))
 
     print("Looked in:")
     for stash in stashes { print("  \(stash.label.padding(toLength: 22, withPad: " ", startingAt: 0))\(stash.url.path)") }
@@ -349,6 +358,13 @@ case "local":
     if let scan = inventory.summary {
         print("\n\(scan.faces) face(s) from \(scan.files) file(s) in "
             + String(format: "%.2f", scan.duration) + "s")
+        if scan.parsed == 0 {
+            print("Every file was already in the index; nothing was read from disk.")
+        } else {
+            print("Read \(scan.parsed) file(s), "
+                + String(format: "%.0f", Double(scan.bytesRead) / 1_048_576) + " MB. "
+                + "\(scan.files - scan.parsed) reused from \(LocalFonts.snapshotURL.lastPathComponent).")
+        }
     }
     print("These are served to any application that asks. `--no-local` turns that off.")
 

@@ -138,6 +138,14 @@ be: the request has to be declined while the download runs. The local index is
 built before the first request arrives, so a local hit is answered synchronously
 and the document renders correctly the first time, with no reopen.
 
+That claim only holds because the index is cached. Those stashes are **1.35 GB
+across ~690 files**, and reading them all takes 0.13s warm but **34 seconds on
+the first run after a boot** — which is precisely the run that races the user's
+first document. Parse results are stored in `local-index.json` against each
+file's size and modification date, so the read happens once per file ever rather
+than once per login; later starts read no font bytes at all. `untofu local`
+reports which of the two just happened, and `--rebuild` forces the long way.
+
 Where several files answer to the same name — and they do, because every face in
 a family carries the family name — the closest to regular upright wins, scored on
 the OS/2 weight axis. Without that, asking for "Calibri" gets you whichever file

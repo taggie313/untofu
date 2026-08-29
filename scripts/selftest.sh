@@ -139,6 +139,42 @@ else
   echo "  SKIP  Downloads stash test (could not download a font to plant)"
 fi
 
+# The index is cached against size and modification date. Reading every file
+# every time was the original shape, chosen on a warm benchmark of 0.13s — the
+# wrong measurement, because these stashes are 1.35 GB and the first run after a
+# boot took 34 seconds, racing the user's first document.
+rm -f "$CACHE/local-index.json"
+first=$($BIN local 2>/dev/null | grep -c 'Read [0-9]* file')
+check "$first" "1" "a fresh install reads the font files"
+check "$($BIN local 2>/dev/null | grep -c 'nothing was read from disk')" "1" \
+      "and the next run reads none of them"
+check "$($BIN local --rebuild 2>/dev/null | grep -c 'Read [0-9]* file')" "1" \
+      "--rebuild re-reads them anyway"
+
+# Fast is worthless if it is also wrong: the cached index has to resolve exactly
+# as a freshly-parsed one does.
+$BIN local --rebuild 2>/dev/null | sed '/face(s) from/,$d' > "$CACHE/.idx-rebuild"
+$BIN local           2>/dev/null | sed '/face(s) from/,$d' > "$CACHE/.idx-reused"
+if diff -q "$CACHE/.idx-rebuild" "$CACHE/.idx-reused" >/dev/null 2>&1; then
+  ok "the cached index resolves identically to a full re-read"
+else
+  bad "the cached index differs from a full re-read"
+fi
+rm -f "$CACHE/.idx-rebuild" "$CACHE/.idx-reused"
+
+# A font that changed underneath us must not be served from a stale parse.
+STALE="$HOME/Downloads/untofu-selftest-stale.ttf"
+if [ -s "$LOCALSRC" ]; then
+  cp "$LOCALSRC" "$STALE"
+  $BIN local >/dev/null 2>&1                      # pick it up once
+  touch "$STALE"
+  check "$($BIN local 2>/dev/null | grep -c 'Read 1 file')" "1" \
+        "a file whose timestamp moved is read again, and only that one"
+  rm -f "$STALE"
+  check "$($BIN local 2>/dev/null | grep -c 'nothing was read from disk')" "1" \
+        "and a deleted file simply drops out"
+fi
+
 # Office ships 251 faces inside its bundles. Every one of them carries the
 # family name, so a request for bare "Calibri" is satisfiable by Calibrii.ttf and
 # the document silently comes out in italic — which is what the face scoring in
