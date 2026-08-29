@@ -46,6 +46,22 @@ else
   exit 2
 fi
 
+# Half these tests fetch from google/fonts through GitHub's API, which allows 60
+# requests an hour unauthenticated — and a couple of full runs will exhaust it.
+# Without this check that shows up as nine unrelated-looking failures in three
+# sections, which is a bad half hour. Say it once, at the top, instead.
+REMAINING=$(curl -s ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
+  https://api.github.com/rate_limit 2>/dev/null |
+  sed -n 's/.*"remaining"[ :]*\([0-9]*\).*/\1/p' | head -1)
+if [ -n "$REMAINING" ] && [ "$REMAINING" -lt 25 ] 2>/dev/null; then
+  echo
+  echo "  !! GitHub API budget is down to $REMAINING requests."
+  echo "     Every fetch test below will fail, and none of it will be untofu's"
+  echo "     fault. Wait for the hourly reset, or:"
+  echo "       export GITHUB_TOKEN=\$(gh auth token)"
+  echo
+fi
+
 echo
 echo "== resolution =="
 rm -rf "$CACHE"
