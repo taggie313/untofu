@@ -24,6 +24,8 @@ func usage() -> Never {
       untofu policy <pid>       Show how a given process would be treated.
       untofu explain <PSName>   Show how a font name would be classified, without
                                 fetching anything.
+      untofu local              List fonts found on this Mac that no application
+                                has registered.
       untofu notify-test        Post a sample notification banner.
       untofu dialog-test        Show the "couldn't find it" dialog.
 
@@ -33,11 +35,24 @@ func usage() -> Never {
           --banner                 Announce successes as a transient banner
                                    instead of a dialog needing dismissal.
           --no-dialog              Suppress the "couldn't find it" dialog.
+          --no-local               Do not serve fonts found on this Mac outside the
+                                   installed font library. See LOCAL FONTS below.
           --fetch-for-browsers     Also fetch for browsers. Off by default: a CSS
                                    font stack is a preference list the page is
                                    built to fall through, so fetching for one is
                                    noise, and every miss would put a font name a
                                    web page chose into a request to GitHub.
+
+    LOCAL FONTS
+      Most "missing" fonts are already on the disk and merely registered to
+      nobody: Office ships 251 faces inside its application bundles, Adobe syncs
+      activated Adobe Fonts into a hidden CoreSync directory, and Office caches
+      fonts it downloads on demand. untofu indexes those at startup and serves
+      them, which is the only path fast enough to fix the document that asked.
+
+      Whether a font bundled with one application may be used by another is a
+      question for its licence, not for this tool. `--no-local` turns it off, and
+      `untofu local` shows exactly what would be served and where it came from.
 
     ENVIRONMENT
       GITHUB_TOKEN                 Raises the google/fonts listing rate limit above
@@ -60,7 +75,8 @@ case "run":
     let quiet = flags.contains("--quiet") || flags.contains("-q")
     let noDialog = quiet || flags.contains("--no-dialog")
     let style: Notifier.Style = flags.contains("--banner") ? .banner : .dialog
-    let provider = Provider(cache: cache,
+    let local = flags.contains("--no-local") ? nil : LocalFonts()
+    let provider = Provider(cache: cache, local: local,
                             notifier: quiet ? nil : Notifier(style: style),
                             reporter: noDialog ? nil : UnresolvedReporter(),
                             fetchForBrowsers: flags.contains("--fetch-for-browsers"))
@@ -85,9 +101,18 @@ case "run":
     let hangup = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .global())
     hangup.setEventHandler {
         cache.reload()
+        local?.refresh()
         Log.info("index reloaded — \(cache.entries.count) face(s)")
     }
     hangup.resume()
+
+    // Off the main thread: the runloop must start accepting font requests now,
+    // not once several hundred files have been parsed. Requests arriving during
+    // the scan fall through to the fetch path, which is the behaviour that
+    // shipped before the local index existed.
+    if let local {
+        DispatchQueue.global(qos: .utility).async { local.refresh() }
+    }
 
     Log.info("untofu running — \(cache.entries.count) face(s) cached")
     provider.run()
@@ -121,6 +146,10 @@ case "status":
         print("              Stop one: `brew services stop untofu` or `untofu uninstall`.")
     }
     print("cache:      \(cache.entries.count) face(s) in \(Cache.root.path)")
+    let statusLocal = LocalFonts()
+    statusLocal.refresh()
+    print("local:      \(statusLocal.faceCount) unregistered face(s) on this Mac "
+        + "(`untofu local` to see them)")
     print("unresolved: \(cache.unresolvedNames.count) name(s) in negative cache")
     print("browsers:   cache reads only, no fetching (--fetch-for-browsers to change)")
     if !hookAvailable { exit(3) }
@@ -242,7 +271,43 @@ case "explain":
     print("display:     \(Resolver.displayFamily(for: subject))")
     print("proprietary: \(Resolver.isKnownProprietary(subject) ? "yes — will not be fetched or reported" : "no")")
     print("cached:      \(cache.path(for: subject) ?? "no")")
+    let explainLocal = LocalFonts()
+    explainLocal.refresh()
+    if let path = explainLocal.path(for: subject) {
+        print("local:       \(explainLocal.origin(ofPath: path) ?? "on disk") — \(path)")
+    } else {
+        print("local:       not found on this Mac outside the installed font library")
+    }
     print("retry:       \(cache.shouldAttempt(subject) ? "allowed" : "suppressed, failed within the last 6h")")
+
+case "local":
+    let inventory = LocalFonts()
+    let stashes = LocalFonts.stashes()
+    inventory.refresh()
+
+    print("Looked in:")
+    for stash in stashes { print("  \(stash.label.padding(toLength: 22, withPad: " ", startingAt: 0))\(stash.url.path)") }
+
+    let listed = inventory.entries
+    guard !listed.isEmpty else {
+        print("\nNothing found. Every font on this Mac is either installed normally or absent.")
+        break
+    }
+
+    // Grouped by where it came from, because that is the question a user
+    // actually has: not "what is indexed" but "why can Keynote suddenly set
+    // Calibri". Names only — the paths are long and the same for whole runs.
+    print("")
+    for origin in Set(listed.map(\.origin)).sorted() {
+        let names = listed.filter { $0.origin == origin }.map(\.psName).sorted()
+        print("\(origin) — \(names.count) face(s)")
+        for name in names { print("    \(name)") }
+    }
+    if let scan = inventory.summary {
+        print("\n\(scan.faces) face(s) from \(scan.files) file(s) in "
+            + String(format: "%.2f", scan.duration) + "s")
+    }
+    print("These are served to any application that asks. `--no-local` turns that off.")
 
 case "verify":
     let dropped = cache.verify()

@@ -105,6 +105,42 @@ check "$(proprietary 'Courier Prime')" "0" "with no catalogue, does not suppress
 check "$(proprietary 'Aptos Display')" "1" "with no catalogue, still suppresses Aptos Display"
 
 echo
+echo "== local fonts =="
+# Most "missing" fonts are on the disk already and merely registered to nobody.
+# The portable half of this uses a font planted in ~/Downloads, so it runs the
+# same on a machine with no Office and no Adobe installed.
+LOCALSRC="$CACHE/fonts/local-selftest.ttf"
+rm -rf "$CACHE"; mkdir -p "$CACHE/fonts"
+curl -sL -o "$LOCALSRC" \
+  "https://raw.githubusercontent.com/google/fonts/main/ofl/lora/Lora%5Bwght%5D.ttf"
+PLANTED="$HOME/Downloads/untofu-selftest-Lora.ttf"
+if [ -s "$LOCALSRC" ]; then
+  cp "$LOCALSRC" "$PLANTED"
+  check "$($BIN explain Lora-Regular | grep -c '^local: *Downloads')" "1" \
+        "finds an uninstalled font sitting in Downloads"
+  check "$($BIN explain Lora-Regular | grep -c '^cached: *no')" "1" \
+        "and serves it without fetching or copying anything"
+  rm -f "$PLANTED"
+  check "$($BIN explain Lora-Regular | grep -c '^local: *not found')" "1" \
+        "and forgets it once the file is gone"
+else
+  echo "  SKIP  Downloads stash test (could not download a font to plant)"
+fi
+
+# Office ships 251 faces inside its bundles. Every one of them carries the
+# family name, so a request for bare "Calibri" is satisfiable by Calibrii.ttf and
+# the document silently comes out in italic — which is what the face scoring in
+# LocalFonts.refresh exists to prevent.
+if [ -d "/Applications/Microsoft Excel.app/Contents/Resources/DFonts" ]; then
+  localfile(){ $BIN explain "$1" | sed -n 's/^local: *//p' | sed 's/.* — //'; }
+  check "$(basename "$(localfile Calibri)")"        "Calibri.ttf"  "bare Calibri resolves to the regular face"
+  check "$(basename "$(localfile Calibri-Italic)")" "Calibrii.ttf" "an exact face name still resolves to that face"
+  check "$($BIN local | grep -c '^Microsoft Office')" "1" "reports Office as the origin of what it found"
+else
+  echo "  SKIP  Office bundle tests (Microsoft Excel is not installed)"
+fi
+
+echo
 echo "== concurrency =="
 rm -rf "$CACHE"
 # Each fetch stages downloads in its own scratch directory. A shared one is a

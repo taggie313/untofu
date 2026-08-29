@@ -103,6 +103,46 @@ mid-open. So:
 That first miss is by design and is the reason the notification says "reopen the
 document".
 
+### Fonts already on the disk
+
+A font being "missing" usually does not mean the bytes are absent. It means no
+one registered them:
+
+- Microsoft Office ships **251 faces inside its application bundles** — Calibri,
+  Cambria, Aptos, the lot — and registers them privately. Word can set Calibri;
+  Keynote cannot see it.
+- Office writes fonts it downloads on demand into a **cloud font cache** under
+  its group container.
+- Adobe syncs activated Adobe Fonts into **CoreSync**, as hidden files with
+  numeric names, resolvable only by Adobe applications.
+- And there is the font you downloaded and never double-clicked.
+
+untofu indexes those at startup — reading the real PostScript names out of each
+file, never trusting the filename, which is the only way the Adobe stash is
+usable at all — and serves the path straight back to CoreText:
+
+```
+$ untofu local
+Microsoft Office — 544 face(s)
+Adobe Creative Cloud — 33 face(s)
+Office cloud fonts — 4 face(s)
+```
+
+This is the only path fast enough to fix the document that asked. A fetch cannot
+be: the request has to be declined while the download runs. The local index is
+built before the first request arrives, so a local hit is answered synchronously
+and the document renders correctly the first time, with no reopen.
+
+Where several files answer to the same name — and they do, because every face in
+a family carries the family name — the closest to regular upright wins, scored on
+the OS/2 weight axis. Without that, asking for "Calibri" gets you whichever file
+the directory listed first, and a document that silently comes out in italic.
+
+Whether a font bundled with one application may be used by another is a question
+for that font's licence, not for this tool. `untofu local` shows exactly what
+would be served and where each face came from; `--no-local` turns the whole thing
+off.
+
 ### Resolution and verification
 
 A PostScript name is turned into candidate family slugs — `RalewayRoman-Regular`

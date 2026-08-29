@@ -13,19 +13,100 @@ struct FontFile {
     let url: URL
     let postScriptNames: Set<String>
 
+    /// The subset that identifies one specific face rather than a whole family.
+    ///
+    /// Every face in a family carries the family name in its `name` table, so
+    /// `postScriptNames` for Calibri Italic contains "Calibri" just as Calibri
+    /// Regular's does. That is correct for answering "could this file satisfy the
+    /// request" — a bare family request is satisfiable by any member — but it is
+    /// useless for choosing *between* candidates, and choosing badly is visible:
+    /// a request for Calibri answered with Calibrii.ttf renders the document in
+    /// italic. These names are the ones that pick a face unambiguously.
+    let exactNames: Set<String>
+
+    /// Style within the family — "Regular", "Bold Italic", "Light" — from the
+    /// typographic subfamily where the font has one, else the legacy field.
+    let subfamily: String?
+
+    /// OS/2 usWeightClass: 400 is regular, 700 bold, 300 light. Nil when the
+    /// font has no OS/2 table, which is rare outside bitmap and CJK legacy faces.
+    let weightClass: Int?
+
+    /// Whether OS/2 flags this face as italic or oblique.
+    let isItalic: Bool
+
     func answers(to psName: String) -> Bool {
         let wanted = psName.lowercased()
         return postScriptNames.contains { $0.lowercased() == wanted }
     }
 
+    /// How plain this face is, 0–100. Used to break a tie between files that all
+    /// answer to the same bare family name: absent any other information, the
+    /// regular upright weight is what an application asking for "Calibri" wants.
+    ///
+    /// Scored on the weight axis rather than by counting style words, because
+    /// the interesting case is a family where no regular exists at all. An Adobe
+    /// Fonts library with Myriad Pro activated in Light, SemiBold and Bold has
+    /// three faces a request for "Myriad Pro" could be answered with, and they
+    /// are equally many words. Light is a far better answer than Bold, and only
+    /// the weight axis says so.
+    var plainness: Int {
+        if let weightClass {
+            // 400 is regular; every 10 points away costs 1, so 300 (Light)
+            // outranks 600 (SemiBold) outranks 700 (Bold).
+            let distance = abs(weightClass - 400) / 10
+            return max(0, 100 - distance) - (isItalic ? 30 : 0)
+        }
+        guard let subfamily = subfamily?.lowercased() else { return 0 }
+        if subfamily == "regular" || subfamily == "book" { return 100 }
+        let words = subfamily.split(whereSeparator: { !$0.isLetter }).count
+        return max(0, 50 - 10 * words) - (isItalic ? 30 : 0)
+    }
+
     static func read(_ url: URL) -> FontFile? {
         guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
         let r = Reader(data)
-        var collected = Set<String>()
+        var all = Set<String>()
+        var exact = Set<String>()
+        var subfamily: String?
+        var weightClass: Int?
+        var isItalic = false
         for offset in sfntOffsets(r) {
-            collected.formUnion(psNames(in: r, at: offset))
+            let parsed = psNames(in: r, at: offset)
+            all.formUnion(parsed.all)
+            exact.formUnion(parsed.exact)
+            // A .ttc holds several faces; the first is as good a label as any and
+            // plainness only ever breaks ties between whole files.
+            if subfamily == nil { subfamily = parsed.subfamily }
+            if weightClass == nil {
+                let metrics = os2Metrics(r, at: offset)
+                weightClass = metrics.weightClass
+                isItalic = metrics.isItalic
+            }
         }
-        return collected.isEmpty ? nil : FontFile(url: url, postScriptNames: collected)
+        return all.isEmpty ? nil : FontFile(url: url, postScriptNames: all,
+                                            exactNames: exact, subfamily: subfamily,
+                                            weightClass: weightClass, isItalic: isItalic)
+    }
+
+    /// usWeightClass and the italic flag out of the OS/2 table.
+    private static func os2Metrics(_ r: Reader, at base: Int) -> (weightClass: Int?, isItalic: Bool) {
+        guard let tableCount = r.u16(base + 4) else { return (nil, false) }
+        var os2: Int?
+        for i in 0..<Int(tableCount) {
+            let rec = base + 12 + 16 * i
+            guard let tag = r.u32(rec), let off = r.u32(rec + 8) else { continue }
+            if tag == 0x4F53_2F32 { os2 = Int(off); break }   // 'OS/2'
+        }
+        guard let os2 else { return (nil, false) }
+        let weight = r.u16(os2 + 4).map(Int.init)
+        // fsSelection bit 0 is ITALIC. The field sits at offset 62, past the end
+        // of a truncated table, so a nil read simply means "not flagged".
+        let italic = (r.u16(os2 + 62).map { $0 & 0x01 != 0 }) ?? false
+        // A nonsense weight is worse than none: some fonts write 0, and older
+        // ones use the 1-9 scale rather than 100-900.
+        guard let weight, weight >= 100, weight <= 1000 else { return (nil, italic) }
+        return (weight, italic)
     }
 
     // MARK: - SFNT walking
@@ -39,8 +120,14 @@ struct FontFile {
         return (0..<Int(count)).compactMap { r.u32(12 + 4 * $0).map(Int.init) }
     }
 
-    private static func psNames(in r: Reader, at base: Int) -> Set<String> {
-        guard let tableCount = r.u16(base + 4) else { return [] }
+    private struct ParsedNames {
+        var all: Set<String> = []
+        var exact: Set<String> = []
+        var subfamily: String?
+    }
+
+    private static func psNames(in r: Reader, at base: Int) -> ParsedNames {
+        guard let tableCount = r.u16(base + 4) else { return ParsedNames() }
         var nameTable: Int?
         var fvarTable: Int?
         for i in 0..<Int(tableCount) {
@@ -49,14 +136,18 @@ struct FontFile {
             if tag == 0x6E61_6D65 { nameTable = Int(off) }   // 'name'
             if tag == 0x6676_6172 { fvarTable = Int(off) }   // 'fvar'
         }
-        guard let nameOffset = nameTable else { return [] }
+        guard let nameOffset = nameTable else { return ParsedNames() }
         let records = nameRecords(r, at: nameOffset)
 
-        var result = Set<String>()
-        if let own = records[6] { result.insert(own) }       // nameID 6 = PostScript name
+        var parsed = ParsedNames()
+        parsed.subfamily = records[17] ?? records[2]         // typographic, then legacy
+        if let own = records[6] { parsed.exact.insert(own) } // nameID 6 = PostScript name
         if let fvarOffset = fvarTable {
-            result.formUnion(instanceNames(r, at: fvarOffset, names: records))
+            // A named instance names one point in the design space, so it picks a
+            // face as precisely as nameID 6 does.
+            parsed.exact.formUnion(instanceNames(r, at: fvarOffset, names: records))
         }
+        var result = parsed.exact
 
         // Family names too, spaced and squashed. Applications do not always ask
         // by PostScript name: PowerPoint requests a bare "Roboto" for a theme
@@ -68,7 +159,8 @@ struct FontFile {
             result.insert(family)
             result.insert(squashed(family))
         }
-        return result
+        parsed.all = result
+        return parsed
     }
 
     /// nameID -> string, preferring the Windows/Unicode record when a nameID

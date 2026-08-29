@@ -7,6 +7,7 @@ import Foundation
 /// a background queue so the callback returns immediately.
 final class Provider {
     private let cache: Cache
+    private let local: LocalFonts?
     private let notifier: Notifier?
     private let reporter: UnresolvedReporter?
     private let queue = DispatchQueue(label: "net.elusive.untofu.resolve", qos: .utility)
@@ -16,9 +17,11 @@ final class Provider {
     /// When false, a browser's cache misses are declined rather than fetched.
     private let fetchForBrowsers: Bool
 
-    init(cache: Cache, notifier: Notifier? = nil, reporter: UnresolvedReporter? = nil,
+    init(cache: Cache, local: LocalFonts? = nil,
+         notifier: Notifier? = nil, reporter: UnresolvedReporter? = nil,
          fetchForBrowsers: Bool = false) {
         self.cache = cache
+        self.local = local
         self.notifier = notifier
         self.reporter = reporter
         self.fetchForBrowsers = fetchForBrowsers
@@ -45,6 +48,19 @@ final class Provider {
 
         if let path = cache.path(for: psName) {
             Log.info("hit  \(psName)  (pid \(pid))")
+            return path
+        }
+
+        // A font already on this disk but registered to nobody. Served to
+        // everyone including browsers: nothing is fetched, nothing leaves the
+        // machine, and the file was readable by the requesting process anyway.
+        //
+        // This is the only path that answers in time. A fetch cannot help the
+        // layout that triggered it — the request has to be declined while the
+        // download runs — but the local index is built before the first request
+        // arrives, so the document renders correctly the first time.
+        if let path = local?.path(for: psName) {
+            Log.info("local \(psName)  (pid \(pid)) <- \(local?.origin(ofPath: path) ?? "disk")")
             return path
         }
 
