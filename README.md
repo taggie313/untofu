@@ -53,6 +53,7 @@ untofu status             hook availability, agent state, cache size
 untofu fetch <PSName>     resolve and cache one name now
 untofu list               list cached faces
 untofu local              fonts on this Mac that no application has registered
+untofu folders            which font locations are searched; --allow opts in
 untofu explain <PSName>   how a name is classified, without fetching anything
 untofu update             check whether a newer untofu exists
 untofu suppressed         fonts you asked not to be told about
@@ -150,6 +151,16 @@ Where several files answer to the same name — and they do, because every face 
 a family carries the family name — the closest to regular upright wins, scored on
 the OS/2 weight axis. Without that, asking for "Calibri" gets you whichever file
 the directory listed first, and a document that silently comes out in italic.
+
+**Only places macOS does not gate are searched by default.** The Office bundles
+are the bulk of it — 544 of 581 faces on the machine this was built on — and need
+no permission. The other three sit behind TCC, so reading them makes macOS
+interrupt with *"untofu would like to access files in your Downloads folder"*. A
+background agent with no window provoking that, unasked, is exactly the kind of
+unexplained dialog this tool exists to remove, so it does not.
+
+`untofu folders` lists both sets; `untofu folders --allow` opts in, in the
+foreground, where the permission prompts are an answer to something you just did.
 
 Whether a font bundled with one application may be used by another is a question
 for that font's licence, not for this tool. `untofu local` shows exactly what
