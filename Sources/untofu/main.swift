@@ -393,6 +393,21 @@ case "notify-test":
     print("Posted a sample banner. If nothing appeared, check System Settings > "
         + "Notifications > Script Editor — banners posted this way are attributed there.")
 
+case "report-test":
+    // Not in the usage text: proves the client half of the reporting path
+    // against whatever endpoint is currently deployed. The collector recognises
+    // this font name and deliberately does not store it, so checking that the
+    // endpoint works cannot inflate the numbers it exists to report.
+    let probe = MissReport.build(font: positional.count > 1 ? positional[1] : "__healthcheck__",
+                                 requesterPID: nil, foundLocally: false)
+    print("POST \(MissReport.endpoint.absoluteString)")
+    print(probe.previewJSON)
+    if let failure = probe.send() {
+        FileHandle.standardError.write(Data("✗ \(failure)\n".utf8))
+        exit(1)
+    }
+    print("✓ accepted")
+
 case "dialog-snapshot":
     // Not in the usage text: a development aid for reviewing the panel's layout
     // without needing a Screen Recording grant to photograph it.
