@@ -53,7 +53,7 @@ untofu status             hook availability, agent state, cache size
 untofu fetch <PSName>     resolve and cache one name now
 untofu list               list cached faces
 untofu local              fonts on this Mac that no application has registered
-untofu folders            which font locations are searched; --allow opts in
+untofu folders            which locations are read vs served from the record
 untofu explain <PSName>   how a name is classified, without fetching anything
 untofu update             check whether a newer untofu exists
 untofu suppressed         fonts you asked not to be told about
@@ -152,15 +152,38 @@ a family carries the family name — the closest to regular upright wins, scored
 the OS/2 weight axis. Without that, asking for "Calibri" gets you whichever file
 the directory listed first, and a document that silently comes out in italic.
 
-**Only places macOS does not gate are searched by default.** The Office bundles
-are the bulk of it — 544 of 581 faces on the machine this was built on — and need
-no permission. The other three sit behind TCC, so reading them makes macOS
-interrupt with *"untofu would like to access files in your Downloads folder"*. A
-background agent with no window provoking that, unasked, is exactly the kind of
-unexplained dialog this tool exists to remove, so it does not.
+**The agent never opens a folder macOS gates.** Three of those locations sit
+behind TCC — Office's cloud cache, Adobe's CoreSync directory, and `~/Downloads`
+— so reading them makes macOS interrupt with *"untofu would like to access files
+in your Downloads folder"*. A background agent with no window provoking that is
+the kind of unexplained dialog this tool exists to remove.
 
-`untofu folders` lists both sets; `untofu folders --allow` opts in, in the
-foreground, where the permission prompts are an answer to something you just did.
+Asking permission once would be fine if the answer stuck. It does not: the agent
+re-prompted on a later restart of the very same installed binary. So the walk and
+the serve are separated.
+
+```
+untofu folders --allow      you run it; it reads those folders and records what is there
+untofu folders --rescan     re-read them, after installing something new
+```
+
+The agent then serves those fonts **from the record, without ever opening the
+directories**. Which works because a font provider does not need access to the
+file it names — the requesting application reads it, through the sandbox
+extension CoreText issues for the returned URL.
+
+That is measured, not assumed. Calibri's own glyph data, renamed so no existing
+system mapping could interfere and served out of a gated directory by a provider
+with no access to it, rendered in Keynote byte-identically to the installed font:
+
+```
+reference   font genuinely installed        3876B  sha:2f1ec69c60d6
+baseline    font absent, no agent           6656B  sha:e106a38dd373
+test        agent serving, never opened it  3876B  sha:2f1ec69c60d6
+```
+
+`untofu folders` lists which locations are read directly and which are served
+from the record.
 
 Whether a font bundled with one application may be used by another is a question
 for that font's licence, not for this tool. `untofu local` shows exactly what

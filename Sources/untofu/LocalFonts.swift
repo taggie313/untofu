@@ -138,6 +138,14 @@ final class LocalFonts {
         let names: [String]
         let exact: [String]
         let plainness: Int
+        /// Which stash this came from, for `untofu local` and the dialog.
+        let origin: String
+        /// Whether reading it required a permission the agent does not ask for.
+        /// These entries are carried forward on trust rather than re-walked.
+        let gated: Bool
+        /// Stash priority, so a tie between two files resolves the same way it
+        /// would have during a walk even when one side came from the snapshot.
+        let rank: Int
     }
 
     private struct Snapshot: Codable {
@@ -147,7 +155,34 @@ final class LocalFonts {
         let files: [String: Entry]
     }
 
-    private static let snapshotVersion = 2
+    private static let snapshotVersion = 3
+
+    /// What to do about the font stashes macOS gates behind a permission prompt.
+    ///
+    /// The agent must never walk them. Not because it lacks permission — it can
+    /// be granted — but because the grant does not stick: it re-prompted on a
+    /// later restart of the very same installed binary, and a background agent
+    /// that interrupts you at login is worse than one that misses a few fonts.
+    ///
+    /// So the walk and the serve are separated. The CLI walks, in the
+    /// foreground, when you ask it to; the agent serves what the CLI recorded,
+    /// having never opened those directories. Which works because a provider
+    /// does not need access to the file it names — the client reads it, through
+    /// the sandbox extension CoreText issues for the returned URL. Measured
+    /// rather than assumed: Calibri's own glyph data, served from a gated
+    /// directory by a provider with no access to it, rendered in Keynote
+    /// identically to the installed font.
+    enum GatedPolicy {
+        /// Not opted in. Gated entries are ignored and dropped from the snapshot.
+        case exclude
+        /// Opted in, and this process must not prompt. Serve what the snapshot
+        /// already records, and never touch those directories. The agent.
+        case trustSnapshot
+        /// Opted in, user-invoked, in the foreground. Walk them and record what
+        /// is there — this is the one place a permission prompt is acceptable,
+        /// because it answers something the user just did.
+        case walk
+    }
 
     struct Scan {
         let files: Int
@@ -158,6 +193,9 @@ final class LocalFonts {
         /// Bytes read to do it. This is the number that matters: it is what the
         /// cold start was actually spending its time on.
         let bytesRead: Int64
+        /// Entries carried forward from the snapshot without being looked at,
+        /// because looking would have prompted.
+        let trusted: Int
     }
 
     private let lock = NSLock()
@@ -222,61 +260,77 @@ final class LocalFonts {
     /// modification date, so that cost is paid once per file ever rather than
     /// once per login.
     @discardableResult
-    func refresh(rebuild: Bool = false, includingPersonal personal: Bool = false) -> Int {
+    func refresh(rebuild: Bool = false, gated: GatedPolicy = .exclude) -> Int {
         let started = Date()
         let previous = rebuild ? [:] : LocalFonts.loadSnapshot()
 
         var current: [String: Entry] = [:]
-        var freshIndex: [String: String] = [:]
-        var freshOrigins: [String: String] = [:]
-        var scores: [String: Int] = [:]
         var fileCount = 0
         var parsedCount = 0
+        var trustedCount = 0
         var bytesRead: Int64 = 0
 
-        // Best score wins rather than first writer, because several files
-        // legitimately answer to the same name and picking wrong is visible:
-        // every face in a family carries the family name, so a request for bare
-        // "Calibri" is satisfiable by Calibrii.ttf and the document comes out in
-        // italic. Ties fall back to stash order, so an Office bundle beats a
-        // stray download.
-        for (rank, stash) in LocalFonts.stashes(includingPersonal: personal).enumerated() {
+        // Walk what this process is allowed to walk. Under .trustSnapshot the
+        // gated stashes are not even enumerated — enumerating is the thing that
+        // prompts.
+        let walking = LocalFonts.stashes(includingPersonal: gated == .walk)
+        for (rank, stash) in walking.enumerated() {
             for file in LocalFonts.fontFiles(in: stash) {
                 fileCount += 1
-
                 let entry: Entry
                 if let cached = previous[file.url.path],
                    cached.size == file.size, cached.modified == file.modified {
-                    entry = cached
+                    entry = Entry(size: cached.size, modified: cached.modified,
+                                  names: cached.names, exact: cached.exact,
+                                  plainness: cached.plainness, origin: stash.label,
+                                  gated: stash.needsPermission, rank: rank)
                 } else {
                     guard let parsed = FontFile.read(file.url) else { continue }
                     entry = Entry(size: file.size, modified: file.modified,
                                   names: Array(parsed.postScriptNames),
                                   exact: Array(parsed.exactNames),
-                                  plainness: parsed.plainness)
+                                  plainness: parsed.plainness, origin: stash.label,
+                                  gated: stash.needsPermission, rank: rank)
                     parsedCount += 1
                     bytesRead += file.size
                 }
-
                 current[file.url.path] = entry
-                freshOrigins[file.url.path] = stash.label
-
-                let exact = Set(entry.exact)
-                for name in entry.names {
-                    let key = name.lowercased()
-                    // A name that identifies this exact face beats one shared
-                    // with every sibling, whatever their weights.
-                    let score = (exact.contains(name) ? 10_000 : entry.plainness) - rank
-                    if score > (scores[key] ?? Int.min) {
-                        scores[key] = score
-                        freshIndex[key] = file.url.path
-                    }
-                }
             }
         }
 
-        // Drop origins for files that contributed no name, so `untofu local`
-        // does not claim to have indexed something it discarded.
+        // Carry forward what the CLI recorded and this process must not look at.
+        // Taken entirely on trust: a file deleted since the last walk leaves a
+        // path CoreText simply rejects, which degrades to the behaviour before
+        // any of this existed. `untofu folders --rescan` refreshes them.
+        if gated == .trustSnapshot {
+            for (path, entry) in previous where entry.gated && current[path] == nil {
+                current[path] = entry
+                trustedCount += 1
+            }
+        }
+
+        // Best score wins rather than first writer, because several files
+        // legitimately answer to the same name and picking wrong is visible:
+        // every face in a family carries the family name, so a request for bare
+        // "Calibri" is satisfiable by Calibrii.ttf and the document comes out in
+        // italic. Ties fall back to stash order.
+        var freshIndex: [String: String] = [:]
+        var freshOrigins: [String: String] = [:]
+        var scores: [String: Int] = [:]
+        for (path, entry) in current.sorted(by: { $0.key < $1.key }) {
+            freshOrigins[path] = entry.origin
+            let exact = Set(entry.exact)
+            for name in entry.names {
+                let key = name.lowercased()
+                // A name identifying this exact face beats one shared with every
+                // sibling, whatever their weights.
+                let score = (exact.contains(name) ? 10_000 : entry.plainness) - entry.rank
+                if score > (scores[key] ?? Int.min) {
+                    scores[key] = score
+                    freshIndex[key] = path
+                }
+            }
+        }
         let served = Set(freshIndex.values)
         freshOrigins = freshOrigins.filter { served.contains($0.key) }
 
@@ -285,16 +339,14 @@ final class LocalFonts {
         index = freshIndex
         origins = freshOrigins
         lastScan = Scan(files: fileCount, faces: freshIndex.count, duration: elapsed,
-                        parsed: parsedCount, bytesRead: bytesRead)
+                        parsed: parsedCount, bytesRead: bytesRead, trusted: trustedCount)
         lock.unlock()
 
-        // Written even when nothing was parsed: files disappear too, and a
-        // snapshot still naming them would keep them alive forever.
         LocalFonts.saveSnapshot(current)
 
-        Log.debug("local index: \(freshIndex.count) face(s) from \(fileCount) file(s) "
-                + "in \(String(format: "%.2f", elapsed))s "
-                + "(\(parsedCount) read, \(fileCount - parsedCount) reused)")
+        Log.debug("local index: \(freshIndex.count) face(s) from \(fileCount) walked "
+                + "+ \(trustedCount) trusted, in \(String(format: "%.2f", elapsed))s "
+                + "(\(parsedCount) read)")
         return freshIndex.count
     }
 

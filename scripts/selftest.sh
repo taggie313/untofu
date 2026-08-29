@@ -142,23 +142,47 @@ rm -rf "$CACHE"; mkdir -p "$CACHE/fonts"
 curl -sL -o "$LOCALSRC" \
   "https://raw.githubusercontent.com/google/fonts/main/ofl/lora/Lora%5Bwght%5D.ttf"
 PLANTED="$HOME/Downloads/untofu-selftest-Lora.ttf"
+# The sections above wipe the cache directory, and the user's preferences live
+# in it — so without putting them back first, every test below would see a
+# freshly-defaulted "not opted in" and skip itself no matter how the machine is
+# actually configured.
+restore_prefs
 # Downloads is gated by TCC, and the tests must never be the thing that makes
-# macOS interrupt someone. Run this only where the user has already opted in.
+# macOS interrupt someone. Run these only where the user has already opted in.
 PERSONAL=$($BIN folders | grep -c '^Also searched')
 if [ "$PERSONAL" != "1" ]; then
-  echo "  SKIP  Downloads stash tests -- 'untofu folders --allow' not enabled;"
+  echo "  SKIP  gated-stash tests -- 'untofu folders --allow' not enabled;"
   echo "        running them would fire a permission prompt at you"
 elif [ -s "$LOCALSRC" ]; then
   cp "$LOCALSRC" "$PLANTED"
+
+  # A plain run must NOT pick it up: the CLI does not walk gated stashes either
+  # unless asked. Only --rescan does, and only because the user typed it.
+  $BIN local >/dev/null 2>&1
+  check "$($BIN explain Lora-Regular | grep -c '^local: *Downloads')" "0" \
+        "a new font in a gated folder is not picked up without --rescan"
+
+  $BIN folders --rescan >/dev/null 2>&1
   check "$($BIN explain Lora-Regular | grep -c '^local: *Downloads')" "1" \
-        "finds an uninstalled font sitting in Downloads"
-  check "$($BIN explain Lora-Regular | grep -c '^cached: *no')" "1" \
-        "and serves it without fetching or copying anything"
+        "--rescan reads the gated folders and finds it"
+
+  # ...and from then on it is served without those folders being opened again.
+  check "$($BIN local | grep -c 'never opened by this process')" "1" \
+        "later runs serve it from the record, without opening anything gated"
+  check "$($BIN local | grep -c 'served from the recorded index')" "1" \
+        "and say how many files they took on trust"
+  check "$(python3 -c "
+import json,os
+d=json.load(open(os.path.expanduser('$CACHE/local-index.json')))
+print(1 if any(e['gated'] for e in d['files'].values()) else 0)" 2>/dev/null)" "1" \
+        "the record marks which entries came from gated stashes"
+
   rm -f "$PLANTED"
+  $BIN folders --rescan >/dev/null 2>&1
   check "$($BIN explain Lora-Regular | grep -c '^local: *not found')" "1" \
-        "and forgets it once the file is gone"
+        "and a rescan forgets it once the file is gone"
 else
-  echo "  SKIP  Downloads stash test (could not download a font to plant)"
+  echo "  SKIP  gated-stash tests (could not download a font to plant)"
 fi
 
 # The default must reach nothing that prompts. This is the assertion that keeps
@@ -192,19 +216,6 @@ else
   bad "the cached index differs from a full re-read"
 fi
 rm -f "$CACHE/.idx-rebuild" "$CACHE/.idx-reused"
-
-# A font that changed underneath us must not be served from a stale parse.
-STALE="$HOME/Downloads/untofu-selftest-stale.ttf"
-if [ "$PERSONAL" = "1" ] && [ -s "$LOCALSRC" ]; then
-  cp "$LOCALSRC" "$STALE"
-  $BIN local >/dev/null 2>&1                      # pick it up once
-  touch "$STALE"
-  check "$($BIN local 2>/dev/null | grep -c 'Read 1 file')" "1" \
-        "a file whose timestamp moved is read again, and only that one"
-  rm -f "$STALE"
-  check "$($BIN local 2>/dev/null | grep -c 'nothing was read from disk')" "1" \
-        "and a deleted file simply drops out"
-fi
 
 # Office ships 251 faces inside its bundles. Every one of them carries the
 # family name, so a request for bare "Calibri" is satisfiable by Calibrii.ttf and

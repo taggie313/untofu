@@ -9,6 +9,12 @@ Log.verbose = flags.contains("--verbose") || flags.contains("-v")
 let cache = Cache()
 let preferences = Preferences()
 
+/// What any process other than the deliberate, user-invoked walk may do about
+/// the permission-gated stashes: serve what was already recorded, never look.
+func gatedPolicy() -> LocalFonts.GatedPolicy {
+    preferences.value(\.searchPersonalFolders) ? .trustSnapshot : .exclude
+}
+
 func usage() -> Never {
     print("""
     untofu — supplies missing fonts to any macOS app, on demand.
@@ -29,8 +35,9 @@ func usage() -> Never {
       untofu local              List fonts found on this Mac that no application
                                 has registered. --rebuild re-reads every file
                                 rather than trusting the stored index.
-      untofu folders            Show which font locations are searched, and turn
-                                the permission-gated ones on with --allow.
+      untofu folders            Show which font locations are searched. --allow
+                                opts into the permission-gated ones, --rescan
+                                re-reads them, --deny stops.
       untofu update             Check now whether a newer untofu exists.
       untofu suppressed         List fonts you asked not to be told about.
       untofu unsuppress [name]  Start being told about them again. With no name,
@@ -124,7 +131,7 @@ case "run":
         preferences.reload()
         cache.reload()
         let personal = preferences.value(\.searchPersonalFolders)
-        local?.refresh(includingPersonal: personal)
+        local?.refresh(gated: gatedPolicy())
         Log.info("reloaded — \(cache.entries.count) cached face(s), "
                + "\(local?.faceCount ?? 0) local face(s)"
                + (personal ? " including Downloads and app containers" : ""))
@@ -137,18 +144,21 @@ case "run":
     // shipped before the local index existed.
     if let local {
         DispatchQueue.global(qos: .utility).async {
-            local.refresh(includingPersonal: preferences.value(\.searchPersonalFolders))
+            local.refresh(gated: gatedPolicy())
             if let scan = local.summary {
                 // The read count is the interesting half. A first run reads
                 // 1.35 GB and takes half a minute; every later one reads nothing
                 // and takes milliseconds, and the log should make plain which
                 // of those just happened.
                 Log.info("local index: \(scan.faces) unregistered face(s) from "
-                       + "\(scan.files) file(s) in \(String(format: "%.2f", scan.duration))s "
+                       + "\(scan.files) walked file(s) in "
+                       + "\(String(format: "%.2f", scan.duration))s "
                        + (scan.parsed == 0
                           ? "(all reused, nothing read)"
                           : "(read \(scan.parsed) file(s), "
-                            + String(format: "%.0f", Double(scan.bytesRead) / 1_048_576) + " MB)"))
+                            + String(format: "%.0f", Double(scan.bytesRead) / 1_048_576) + " MB)")
+                       + (scan.trusted > 0
+                          ? " + \(scan.trusted) trusted from the recorded index" : ""))
             }
         }
     }
@@ -205,7 +215,7 @@ case "status":
     }
     print("cache:      \(cache.entries.count) face(s) in \(Cache.root.path)")
     let statusLocal = LocalFonts()
-    statusLocal.refresh(includingPersonal: preferences.value(\.searchPersonalFolders))
+    statusLocal.refresh(gated: gatedPolicy())
     print("local:      \(statusLocal.faceCount) unregistered face(s) on this Mac "
         + "(`untofu local` to see them)")
     print("unresolved: \(cache.unresolvedNames.count) name(s) in negative cache")
@@ -337,7 +347,7 @@ case "explain":
     print("proprietary: \(Resolver.isKnownProprietary(subject) ? "yes — will not be fetched or reported" : "no")")
     print("cached:      \(cache.path(for: subject) ?? "no")")
     let explainLocal = LocalFonts()
-    explainLocal.refresh(includingPersonal: preferences.value(\.searchPersonalFolders))
+    explainLocal.refresh(gated: gatedPolicy())
     if let path = explainLocal.path(for: subject) {
         print("local:       \(explainLocal.origin(ofPath: path) ?? "on disk") — \(path)")
     } else if let cousin = explainLocal.relative(of: subject) {
@@ -352,10 +362,24 @@ case "local":
     let inventory = LocalFonts()
     let searchPersonal = preferences.value(\.searchPersonalFolders)
     let stashes = LocalFonts.stashes(includingPersonal: searchPersonal)
-    inventory.refresh(rebuild: flags.contains("--rebuild"), includingPersonal: searchPersonal)
+    // Reporting must not prompt: --rescan is the only way to make this walk the
+    // gated directories, and it is spelled out in `untofu folders`.
+    inventory.refresh(rebuild: flags.contains("--rebuild"),
+                      gated: flags.contains("--rescan") && searchPersonal ? .walk : gatedPolicy())
 
-    print("Looked in:")
-    for stash in stashes { print("  \(stash.label.padding(toLength: 22, withPad: " ", startingAt: 0))\(stash.url.path)") }
+    let walkedGated = flags.contains("--rescan") && searchPersonal
+    print("Read directly:")
+    for stash in stashes where !stash.needsPermission || walkedGated {
+        print("  \(stash.label.padding(toLength: 22, withPad: " ", startingAt: 0))\(stash.url.path)")
+    }
+    let recorded = stashes.filter { $0.needsPermission && !walkedGated }
+    if !recorded.isEmpty {
+        print("")
+        print("Served from the recorded index, never opened by this process:")
+        for stash in recorded {
+            print("  \(stash.label.padding(toLength: 22, withPad: " ", startingAt: 0))\(stash.url.path)")
+        }
+    }
 
     let listed = inventory.entries
     guard !listed.isEmpty else {
@@ -382,6 +406,10 @@ case "local":
                 + String(format: "%.0f", Double(scan.bytesRead) / 1_048_576) + " MB. "
                 + "\(scan.files - scan.parsed) reused from \(LocalFonts.snapshotURL.lastPathComponent).")
         }
+        if scan.trusted > 0 {
+            print("\(scan.trusted) face-bearing file(s) served from the recorded index "
+                + "without opening them — `untofu folders --rescan` re-reads those.")
+        }
     }
     print("These are served to any application that asks. `--no-local` turns that off.")
 
@@ -389,24 +417,27 @@ case "folders":
     let gated = LocalFonts.personalStashes
     let on = preferences.value(\.searchPersonalFolders)
 
-    if flags.contains("--allow") || flags.contains("--deny") {
-        let allow = flags.contains("--allow")
+    if flags.contains("--allow") || flags.contains("--deny") || flags.contains("--rescan") {
+        let allow = !flags.contains("--deny")
         preferences.update { $0.searchPersonalFolders = allow }
+        let warmed = LocalFonts()
         if allow {
-            print("Searching them from now on. macOS will ask permission once per")
-            print("location — that is what the prompts are, and answering them here")
-            print("is why this command exists rather than the agent asking on its own.\n")
-            let warmed = LocalFonts()
-            warmed.refresh(rebuild: true, includingPersonal: true)
-            print("\(warmed.faceCount) face(s) indexed.")
-            LaunchAgent.reloadRunningAgent()
+            print("macOS will ask permission once per location. Answering here is the")
+            print("whole point of this command: the agent never asks, because a grant")
+            print("given to it does not stick — it re-prompted on a later restart of")
+            print("the same binary. So the reading happens here, once, and the agent")
+            print("serves what this records without ever opening those directories.\n")
+            warmed.refresh(rebuild: true, gated: .walk)
         } else {
-            print("Leaving them alone. Re-indexing without them…")
-            let warmed = LocalFonts()
-            warmed.refresh(rebuild: true, includingPersonal: false)
-            print("\(warmed.faceCount) face(s) indexed.")
-            LaunchAgent.reloadRunningAgent()
+            print("Leaving them alone, and dropping them from the index…")
+            warmed.refresh(rebuild: true, gated: .exclude)
         }
+        if let scan = warmed.summary {
+            print("\(scan.faces) face(s) from \(scan.files) file(s)"
+                + (scan.parsed > 0 ? ", \(scan.parsed) read" : ""))
+        }
+        // The agent is holding an index built under the old setting.
+        LaunchAgent.reloadRunningAgent()
         break
     }
 
@@ -423,7 +454,11 @@ case "folders":
     }
     print("")
     if on {
-        print("`untofu folders --deny` stops searching them.")
+        print("The agent serves these from what was recorded here; it never opens")
+        print("them itself, so it cannot interrupt you at login.")
+        print("")
+        print("  untofu folders --rescan   re-read them (after installing new fonts)")
+        print("  untofu folders --deny     stop serving them")
     } else {
         print("These are where Office caches fonts it downloads on demand, where")
         print("Creative Cloud keeps activated Adobe Fonts, and where a font you")
