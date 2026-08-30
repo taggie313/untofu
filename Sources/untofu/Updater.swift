@@ -124,6 +124,10 @@ enum Updater {
             alert.addButton(withTitle: "Check Automatically")
             alert.addButton(withTitle: "Only When I Ask")
 
+            // Same reason as the report confirmation: .accessory processes can
+            // raise a modal behind the frontmost window, and this one is asked
+            // exactly once — if it is missed, it is missed for good.
+            NSApp.activate(ignoringOtherApps: true)
             let allowed = alert.runModal() == .alertFirstButtonReturn
             preferences.update { stored in
                 stored.updateOfferMade = true

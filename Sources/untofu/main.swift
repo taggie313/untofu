@@ -9,6 +9,9 @@ Log.verbose = flags.contains("--verbose") || flags.contains("-v")
 let cache = Cache()
 let preferences = Preferences()
 
+/// Keeps a preview's coalescing object alive; see `dialog-preview`.
+var previewHolder: AnyObject?
+
 /// What any process other than the deliberate, user-invoked walk may do about
 /// the permission-gated stashes: serve what was already recorded, never look.
 func gatedPolicy() -> LocalFonts.GatedPolicy {
@@ -539,6 +542,86 @@ case "report-test":
         exit(1)
     }
     print("✓ accepted")
+
+case "dialog-preview":
+    // Not in the usage text: a development aid for reviewing the wording and
+    // appearance of every dialog untofu can put on screen, without having to
+    // provoke each one for real.
+    let which = positional.count > 1 ? positional[1] : "miss"
+    // .accessory, matching the agent. A bundle-less binary asking for .regular
+    // has no Dock tile to activate into, and an NSAlert raised under it never
+    // makes it to the screen — which is what made this preview look broken while
+    // the identical alert from a .accessory process appeared fine.
+    let previewApp = NSApplication.shared
+    previewApp.setActivationPolicy(.accessory)
+    previewApp.activate(ignoringOtherApps: true)
+
+    switch which {
+    case "miss", "miss-multi":
+        // Held in a variable that outlives this scope. The reporter debounces
+        // through a DispatchWorkItem capturing [weak self], so a local constant
+        // nothing refers to afterwards is released by ARC before the timer
+        // fires and the panel simply never appears.
+        let reporter = UnresolvedReporter(preferences: preferences, local: nil)
+        previewHolder = reporter
+        reporter.record(psName: "Aptos Display", requester: "Keynote", pid: nil)
+        if which == "miss-multi" {
+            reporter.record(psName: "Segoe UI Semibold")
+            reporter.record(psName: "HelveticaNeueLTPro-Bd")
+        }
+    case "report":
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            let sample = MissReport.build(font: "Aptos Display", requesterPID: nil,
+                                          foundLocally: true)
+            NSApp.activate(ignoringOtherApps: true)
+            let confirm = NSAlert()
+            confirm.messageText = "Report that untofu couldn't find Aptos Display?"
+            confirm.informativeText = """
+            This is sent to untofu.elusive.net so the font can be looked into for a \
+            future release. It carries no document name, no file path, and nothing \
+            identifying you or this Mac. Exactly this is sent:
+
+            \(sample.previewJSON)
+            """
+            confirm.alertStyle = .informational
+            confirm.addButton(withTitle: "Send Report")
+            confirm.addButton(withTitle: "Cancel")
+            _ = confirm.runModal()
+            exit(0)
+        }
+    case "update":
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            Log.info("preview: building the update alert")
+            let alert = NSAlert()
+            alert.messageText = "Should untofu check for updates on its own?"
+            alert.informativeText = """
+            untofu never contacts a server unless you ask it to. If you turn this \
+            on it will ask GitHub once a week whether a newer version exists, which \
+            tells GitHub that this Mac runs untofu.
+
+            Either way, every untofu dialog has a "Check for Updates" button that \
+            checks on the spot. You will only be asked this once.
+            """
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "Check Automatically")
+            alert.addButton(withTitle: "Only When I Ask")
+            Log.info("preview: about to runModal")
+            NSApp.activate(ignoringOtherApps: true)
+            _ = alert.runModal()
+            Log.info("preview: alert dismissed")
+            exit(0)
+        }
+    case "success":
+        let notifier = Notifier(style: .dialog)
+        previewHolder = notifier
+        notifier.record(family: "Playfair Display", app: "Keynote")
+        notifier.record(family: "Karla", app: "Keynote")
+        notifier.record(family: "Lora", app: "Keynote")
+    default:
+        print("dialog-preview [miss|miss-multi|report|update|success]")
+        exit(1)
+    }
+    previewApp.run()
 
 case "dialog-snapshot":
     // Not in the usage text: a development aid for reviewing the panel's layout

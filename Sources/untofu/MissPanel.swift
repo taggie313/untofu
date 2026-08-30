@@ -229,7 +229,9 @@ final class MissPanel: NSObject, NSWindowDelegate {
 
         // Naming the application is the difference between a message about
         // nothing in particular and a message about the window in front of you.
-        let who = requester.map { "\($0) asked for it." } ?? "An application asked for it."
+        let subject = names.count == 1 ? "it" : "them"
+        let who = requester.map { "\($0) asked for \(subject)." }
+                  ?? "An application asked for \(subject)."
         text.addArrangedSubview(label(who, font: .systemFont(ofSize: 12),
                                       color: .secondaryLabelColor))
 
@@ -454,6 +456,10 @@ final class MissPanel: NSObject, NSWindowDelegate {
         confirm.alertStyle = .informational
         confirm.addButton(withTitle: "Send Report")
         confirm.addButton(withTitle: "Cancel")
+        // The agent runs .accessory, so an alert raised without activating can
+        // open behind whatever is frontmost — a modal the user cannot see but
+        // which is nonetheless waiting for them.
+        NSApp.activate(ignoringOtherApps: true)
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
 
         reportButton.isEnabled = false
