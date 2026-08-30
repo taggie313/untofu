@@ -263,6 +263,49 @@ else
 fi
 
 echo
+echo "== state watch =="
+# The agent used to learn about a changed record only by being signalled, and
+# twice that failed silently: the pid file was cleared along with the cache, and
+# the test suite restored files with no way to say so. Both times `untofu status`
+# reported the truth while the running agent served a stale index.
+restore_prefs
+if [ "$($BIN folders | grep -c '^Also searched')" = "1" ]; then
+  cp "$CACHE/local-index.json" "$CACHE/.watch-good.json"
+  $BIN run --quiet -v > "$CACHE/.watch.log" 2>&1 &
+  WATCHPID=$!
+  sleep 5
+
+  # Degrade the record IN PLACE and say nothing. In place matters: a vnode watch
+  # on the directory would miss this, which is why the watch polls instead.
+  python3 -c "
+import json
+p='$CACHE/local-index.json'
+d=json.load(open(p))
+d['files']={k:v for k,v in d['files'].items() if not v['gated']}
+json.dump(d, open(p,'w'))"
+  sleep 6
+  check "$(grep -c 'state changed on disk' "$CACHE/.watch.log")" "1" \
+        "the agent notices a record changed in place, with no signal"
+
+  cp "$CACHE/.watch-good.json" "$CACHE/local-index.json"
+  sleep 6
+  check "$(grep -c 'state changed on disk' "$CACHE/.watch.log")" "2" \
+        "and notices it being restored"
+
+  # Its own writes must not wake it, or it churns forever.
+  BEFORE_ACTS=$(grep -c 'state changed on disk' "$CACHE/.watch.log")
+  $BIN fetch Cardo-Regular >/dev/null 2>&1
+  sleep 6
+  check "$(grep -c 'state changed on disk' "$CACHE/.watch.log")" "$BEFORE_ACTS" \
+        "and its own writes do not wake it"
+
+  kill $WATCHPID 2>/dev/null; wait $WATCHPID 2>/dev/null
+  rm -f "$CACHE/.watch.log" "$CACHE/.watch-good.json"
+else
+  echo "  SKIP  state-watch tests -- needs the gated stashes enabled to be meaningful"
+fi
+
+echo
 echo "== preferences =="
 # A settings file that cannot be decoded used to fall back to defaults in
 # silence, so the file said searchPersonalFolders:true while every process read

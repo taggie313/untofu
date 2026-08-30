@@ -123,6 +123,26 @@ case "run":
     try? String(getpid()).write(to: LaunchAgent.pidURL, atomically: true, encoding: .utf8)
     atexit { try? FileManager.default.removeItem(at: LaunchAgent.pidURL) }
 
+    // Watch the state directory, so a change made by a CLI invocation is noticed
+    // whether or not the signal below arrives. It twice did not: once because
+    // the pid file lives in this very directory and was cleared along with it,
+    // once because the test suite restored the files with no way to say so. Both
+    // times the agent went on serving a stale index while `untofu status` — a
+    // fresh process reading from disk — reported the truth.
+    let watcher = StateWatcher(watching: [LocalFonts.snapshotURL,
+                                          Cache.root.appendingPathComponent("preferences.json"),
+                                          Cache.root.appendingPathComponent("index.json")]) {
+        preferences.reload()
+        cache.reload()
+        if local?.adoptSnapshot(gated: gatedPolicy()) == true {
+            Log.info("state changed on disk — \(cache.entries.count) cached face(s), "
+                   + "\(local?.faceCount ?? 0) local face(s)")
+        }
+    }
+    if !watcher.start() {
+        Log.debug("state watch unavailable; relying on SIGHUP alone")
+    }
+
     // Signal-source style, so the handler is a normal closure rather than
     // async-signal-safe C.
     signal(SIGHUP, SIG_IGN)
@@ -181,12 +201,16 @@ case "run":
     // to talk through. Headless and --quiet runs keep the plain runloop: the
     // provider does not need AppKit, and touching NSApplication with no window
     // server is fatal rather than merely useless.
+    // withExtendedLifetime: neither call returns, but nothing refers to the
+    // watcher afterwards, and ARC is free to release it the moment its last use
+    // passes — the same way a released reporter silently stopped a dialog from
+    // ever appearing.
     if wantsUI && AppHost.hasWindowServer {
         Log.info("untofu running — \(cache.entries.count) face(s) cached")
-        AppHost.run(provider: provider)
+        withExtendedLifetime(watcher) { AppHost.run(provider: provider) }
     }
     Log.info("untofu running — \(cache.entries.count) face(s) cached, no interface")
-    provider.run()
+    withExtendedLifetime(watcher) { provider.run() }
 
 case "install":
     do {

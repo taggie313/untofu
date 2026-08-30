@@ -199,6 +199,10 @@ final class LocalFonts {
     }
 
     private let lock = NSLock()
+    /// Size and modification date of the record as this process last read or
+    /// wrote it. A watch event whose fingerprint matches this is our own write
+    /// coming back at us, and acting on it would be a loop.
+    private var lastFingerprint: String?
     private var index: [String: String] = [:]       // lowercased PostScript name -> absolute path
     private var origins: [String: String] = [:]     // absolute path -> stash label
     private var lastScan: Scan?
@@ -318,6 +322,27 @@ final class LocalFonts {
             }
         }
 
+        let elapsed = Date().timeIntervalSince(started)
+        let faces = publish(current, scan: { faces in
+            Scan(files: fileCount, faces: faces, duration: elapsed,
+                 parsed: parsedCount, bytesRead: bytesRead, trusted: trustedCount)
+        })
+        _ = faces
+
+        LocalFonts.saveSnapshot(current)
+        rememberSnapshotFingerprint()
+
+        Log.debug("local index: \(faceCount) face(s) from \(fileCount) walked "
+                + "+ \(trustedCount) trusted, in \(String(format: "%.2f", elapsed))s "
+                + "(\(parsedCount) read)")
+        return faceCount
+    }
+
+    /// Scores a set of entries into the served index. Shared by the walk and by
+    /// adopting the record, so both resolve identically — a second copy of this
+    /// is a second chance for them to disagree about which face wins a name.
+    @discardableResult
+    private func publish(_ current: [String: Entry], scan: (Int) -> Scan) -> Int {
         // Best score wins rather than first writer, because several files
         // legitimately answer to the same name and picking wrong is visible:
         // every face in a family carries the family name, so a request for bare
@@ -343,26 +368,66 @@ final class LocalFonts {
         let served = Set(freshIndex.values)
         freshOrigins = freshOrigins.filter { served.contains($0.key) }
 
-        let elapsed = Date().timeIntervalSince(started)
         lock.lock()
         index = freshIndex
         origins = freshOrigins
-        lastScan = Scan(files: fileCount, faces: freshIndex.count, duration: elapsed,
-                        parsed: parsedCount, bytesRead: bytesRead, trusted: trustedCount)
+        lastScan = scan(freshIndex.count)
         lock.unlock()
-
-        LocalFonts.saveSnapshot(current)
-
-        Log.debug("local index: \(freshIndex.count) face(s) from \(fileCount) walked "
-                + "+ \(trustedCount) trusted, in \(String(format: "%.2f", elapsed))s "
-                + "(\(parsedCount) read)")
         return freshIndex.count
+    }
+
+    /// Rebuilds the served index from the record alone — no directories opened,
+    /// nothing written.
+    ///
+    /// This is what the agent does when another process changes the record: the
+    /// CLI has already walked and written the truth, so re-walking would only
+    /// risk reaching somewhere this process must not touch, and re-writing would
+    /// make the agent's own change wake it again.
+    ///
+    /// Returns false when the record has not actually changed since we last read
+    /// or wrote it, which is the common case and the one that stops a feedback
+    /// loop before it starts.
+    @discardableResult
+    func adoptSnapshot(gated: GatedPolicy) -> Bool {
+        lock.lock()
+        let known = lastFingerprint
+        lock.unlock()
+        guard LocalFonts.snapshotFingerprint() != known else { return false }
+
+        let stored = LocalFonts.loadSnapshot()
+        guard !stored.isEmpty else { return false }
+        let usable = gated == .exclude ? stored.filter { !$0.value.gated } : stored
+        let trusted = usable.values.filter(\.gated).count
+
+        publish(usable, scan: { faces in
+            Scan(files: usable.count - trusted, faces: faces, duration: 0,
+                 parsed: 0, bytesRead: 0, trusted: trusted)
+        })
+        rememberSnapshotFingerprint()
+        Log.info("adopted the record: \(faceCount) local face(s)"
+               + (trusted > 0 ? ", \(trusted) from folders this process never opens" : ""))
+        return true
     }
 
     // MARK: - Snapshot
 
     static var snapshotURL: URL {
         Cache.root.appendingPathComponent("local-index.json")
+    }
+
+    /// Cheap identity for the record on disk. Deliberately not a content hash:
+    /// this runs on every filesystem event and the file is ~150 KB.
+    private static func snapshotFingerprint() -> String? {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: snapshotURL.path),
+              let size = attrs[.size] as? Int,
+              let modified = attrs[.modificationDate] as? Date
+        else { return nil }
+        return "\(size)@\(modified.timeIntervalSince1970)"
+    }
+
+    private func rememberSnapshotFingerprint() {
+        let current = LocalFonts.snapshotFingerprint()
+        lock.lock(); lastFingerprint = current; lock.unlock()
     }
 
     private static func loadSnapshot() -> [String: Entry] {

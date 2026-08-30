@@ -139,6 +139,16 @@ be: the request has to be declined while the download runs. The local index is
 built before the first request arrives, so a local hit is answered synchronously
 and the document renders correctly the first time, with no reopen.
 
+The agent also watches that record. It used to learn about a change only by
+being signalled, and twice that failed in the same silent way — once because the
+pid file lives in the cache directory and was cleared along with it, once because
+the test suite restored the files with no way to say so. Both times `untofu
+status`, a fresh process reading from disk, reported the truth while the running
+agent went on serving a stale index. It is polled rather than watched with a
+`DispatchSource`: modifying a file in place does not change its directory, so a
+vnode watch sees creates and renames but misses a plain `cp` over an existing
+file, which is exactly the case that caused the bug.
+
 That claim only holds because the index is cached. Those stashes are **1.35 GB
 across ~690 files**, and reading them all takes 0.13s warm but **34 seconds on
 the first run after a boot** — which is precisely the run that races the user's
