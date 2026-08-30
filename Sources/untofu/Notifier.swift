@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Announces successful fetches, coalescing a burst into one message.
@@ -6,6 +7,14 @@ import Foundation
 /// the whole point of the message is that the document on screen is still
 /// showing a substitute and needs reopening, which is easy to miss if the
 /// notification quietly expires. `--banner` restores the transient style.
+///
+/// The dialog is AppKit, like the unresolved panel. It was the last surface
+/// still going through `osascript display dialog`, which showed: a generic blue
+/// folder for an icon, attribution to Script Editor rather than to untofu, and —
+/// because osascript is a separate process — a dialog that outlived the agent
+/// that raised it. Running modal is safe here despite the provider living on the
+/// same runloop, because the font-request source is registered in the *common*
+/// modes and so keeps firing while a modal session is up.
 final class Notifier {
     enum Style {
         /// A dialog with an OK button. Stays until acknowledged.
@@ -67,12 +76,20 @@ final class Notifier {
             Notifier.post(title: "untofu", subtitle: headline,
                           body: "\(sentence(families)) — \(reopen)")
         case .dialog:
-            let body = "\(headline)\n\n" + families.map { "  •  \($0)" }.joined(separator: "\n")
-                     + "\n\n\(reopen)"
-            Shell.osascript("""
-            display dialog "\(Shell.escape(body))" with title "untofu" \
-            buttons {"OK"} default button "OK" with icon note
-            """)
+            let list = families.map { "•  \($0)" }.joined(separator: "\n")
+            DispatchQueue.main.async {
+                let alert = NSAlert()
+                alert.messageText = headline
+                alert.informativeText = "\(list)\n\n\(reopen)"
+                alert.alertStyle = .informational
+                alert.icon = Icon.image()
+                alert.addButton(withTitle: "OK")
+                // .accessory processes can raise a modal behind the frontmost
+                // window, which for a message about the document you are looking
+                // at would be worse than useless.
+                NSApp.activate(ignoringOtherApps: true)
+                alert.runModal()
+            }
         }
     }
 

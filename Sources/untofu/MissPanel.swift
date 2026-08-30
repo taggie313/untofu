@@ -444,23 +444,9 @@ final class MissPanel: NSObject, NSWindowDelegate {
 
         // Shown before it is sent, in full. A button that quietly transmits
         // something is a different feature from one that offers to.
-        let confirm = NSAlert()
-        confirm.messageText = "Report that untofu couldn't find \(primary)?"
-        confirm.informativeText = """
-        This is sent to untofu.elusive.net so the font can be looked into for a \
-        future release. It carries no document name, no file path, and nothing \
-        identifying you or this Mac. Exactly this is sent:
-
-        \(report.previewJSON)
-        """
-        confirm.alertStyle = .informational
-        confirm.addButton(withTitle: "Send Report")
-        confirm.addButton(withTitle: "Cancel")
-        // The agent runs .accessory, so an alert raised without activating can
-        // open behind whatever is frontmost — a modal the user cannot see but
-        // which is nonetheless waiting for them.
         NSApp.activate(ignoringOtherApps: true)
-        guard confirm.runModal() == .alertFirstButtonReturn else { return }
+        guard MissPanel.confirmationAlert(for: report).runModal() == .alertFirstButtonReturn
+        else { return }
 
         reportButton.isEnabled = false
         show("Sending…")
@@ -473,6 +459,25 @@ final class MissPanel: NSObject, NSWindowDelegate {
                           ?? "Thanks — reported. \(self.primary) will be looked into.")
             }
         }
+    }
+
+    /// The confirmation, built in one place so `untofu dialog-preview report`
+    /// shows exactly what ships rather than a copy that can drift out of step.
+    static func confirmationAlert(for report: MissReport) -> NSAlert {
+        let confirm = NSAlert()
+        confirm.messageText = "Report that untofu couldn't find \(report.font)?"
+        confirm.informativeText = """
+        This is sent to untofu.elusive.net so the font can be looked into for a \
+        future release. It carries no document name, no file path, and nothing \
+        identifying you or this Mac. Exactly this is sent:
+
+        \(report.previewJSON)
+        """
+        confirm.alertStyle = .informational
+        confirm.icon = Icon.image()
+        confirm.addButton(withTitle: "Send Report")
+        confirm.addButton(withTitle: "Cancel")
+        return confirm
     }
 
     @objc private func checkForUpdates() {

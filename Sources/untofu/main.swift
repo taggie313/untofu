@@ -574,41 +574,13 @@ case "dialog-preview":
             let sample = MissReport.build(font: "Aptos Display", requesterPID: nil,
                                           foundLocally: true)
             NSApp.activate(ignoringOtherApps: true)
-            let confirm = NSAlert()
-            confirm.messageText = "Report that untofu couldn't find Aptos Display?"
-            confirm.informativeText = """
-            This is sent to untofu.elusive.net so the font can be looked into for a \
-            future release. It carries no document name, no file path, and nothing \
-            identifying you or this Mac. Exactly this is sent:
-
-            \(sample.previewJSON)
-            """
-            confirm.alertStyle = .informational
-            confirm.addButton(withTitle: "Send Report")
-            confirm.addButton(withTitle: "Cancel")
-            _ = confirm.runModal()
+            _ = MissPanel.confirmationAlert(for: sample).runModal()
             exit(0)
         }
     case "update":
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            Log.info("preview: building the update alert")
-            let alert = NSAlert()
-            alert.messageText = "Should untofu check for updates on its own?"
-            alert.informativeText = """
-            untofu never contacts a server unless you ask it to. If you turn this \
-            on it will ask GitHub once a week whether a newer version exists, which \
-            tells GitHub that this Mac runs untofu.
-
-            Either way, every untofu dialog has a "Check for Updates" button that \
-            checks on the spot. You will only be asked this once.
-            """
-            alert.alertStyle = .informational
-            alert.addButton(withTitle: "Check Automatically")
-            alert.addButton(withTitle: "Only When I Ask")
-            Log.info("preview: about to runModal")
             NSApp.activate(ignoringOtherApps: true)
-            _ = alert.runModal()
-            Log.info("preview: alert dismissed")
+            _ = Updater.offerAlert().runModal()
             exit(0)
         }
     case "success":

@@ -110,31 +110,38 @@ enum Updater {
         DispatchQueue.main.asyncAfter(deadline: .now() + offerDelay) {
             guard !preferences.value(\.updateOfferMade) else { return }
 
-            let alert = NSAlert()
-            alert.messageText = "Should untofu check for updates on its own?"
-            alert.informativeText = """
-            untofu never contacts a server unless you ask it to. If you turn this \
-            on it will ask GitHub once a week whether a newer version exists, which \
-            tells GitHub that this Mac runs untofu.
-
-            Either way, every untofu dialog has a "Check for Updates" button that \
-            checks on the spot. You will only be asked this once.
-            """
-            alert.alertStyle = .informational
-            alert.addButton(withTitle: "Check Automatically")
-            alert.addButton(withTitle: "Only When I Ask")
-
             // Same reason as the report confirmation: .accessory processes can
             // raise a modal behind the frontmost window, and this one is asked
             // exactly once — if it is missed, it is missed for good.
             NSApp.activate(ignoringOtherApps: true)
-            let allowed = alert.runModal() == .alertFirstButtonReturn
+            let allowed = offerAlert().runModal() == .alertFirstButtonReturn
             preferences.update { stored in
                 stored.updateOfferMade = true
                 stored.updateChecksAllowed = allowed
             }
             Log.info("update checks \(allowed ? "allowed" : "left off") by the user")
         }
+    }
+
+    /// The offer, built in one place so `untofu dialog-preview update` shows
+    /// exactly what ships. A preview that renders its own copy of the wording is
+    /// worse than no preview: it can drift, and then it is quietly lying.
+    static func offerAlert() -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = "Should untofu check for updates on its own?"
+        alert.informativeText = """
+        untofu never contacts a server unless you ask it to. If you turn this \
+        on it will ask GitHub once a week whether a newer version exists, which \
+        tells GitHub that this Mac runs untofu.
+
+        Either way, every untofu dialog has a "Check for Updates" button that \
+        checks on the spot. You will only be asked this once.
+        """
+        alert.alertStyle = .informational
+        alert.icon = Icon.image()
+        alert.addButton(withTitle: "Check Automatically")
+        alert.addButton(withTitle: "Only When I Ask")
+        return alert
     }
 
     /// Runs a check only if the user allowed it and one is due. Returns nil
