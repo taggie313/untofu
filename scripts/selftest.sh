@@ -283,19 +283,38 @@ p='$CACHE/local-index.json'
 d=json.load(open(p))
 d['files']={k:v for k,v in d['files'].items() if not v['gated']}
 json.dump(d, open(p,'w'))"
-  sleep 6
-  check "$(grep -c 'state changed on disk' "$CACHE/.watch.log")" "1" \
-        "the agent notices a record changed in place, with no signal"
+  # Wait for the count to reach N rather than sleeping a fixed time and
+  # asserting. The poll runs every 2s with leeway, and a fixed sleep made this
+  # flaky enough to abort a release: the suite passed standalone and failed
+  # inside release.sh, on the same machine, minutes apart.
+  wait_for_acts() {   # $1 = count to reach, $2 = seconds to allow
+    local waited=0
+    while [ "$waited" -lt "${2:-30}" ]; do
+      [ "$(grep -c 'state changed on disk' "$CACHE/.watch.log")" -ge "$1" ] && return 0
+      sleep 1; waited=$((waited+1))
+    done
+    return 1
+  }
+
+  if wait_for_acts 1 30; then
+    ok "the agent notices a record changed in place, with no signal"
+  else
+    bad "the agent never noticed a record changed in place"
+  fi
 
   cp "$CACHE/.watch-good.json" "$CACHE/local-index.json"
-  sleep 6
-  check "$(grep -c 'state changed on disk' "$CACHE/.watch.log")" "2" \
-        "and notices it being restored"
+  if wait_for_acts 2 30; then
+    ok "and notices it being restored"
+  else
+    bad "the agent never noticed the record being restored"
+  fi
 
-  # Its own writes must not wake it, or it churns forever.
+  # Its own writes must not wake it, or it churns forever. This one is a
+  # negative, so it does have to wait out a fixed window — several poll
+  # intervals, to be sure nothing was merely slow.
   BEFORE_ACTS=$(grep -c 'state changed on disk' "$CACHE/.watch.log")
   $BIN fetch Cardo-Regular >/dev/null 2>&1
-  sleep 6
+  sleep 8
   check "$(grep -c 'state changed on disk' "$CACHE/.watch.log")" "$BEFORE_ACTS" \
         "and its own writes do not wake it"
 
