@@ -20,12 +20,20 @@ PASS=0; FAIL=0
 # Several sections wipe the cache directory, and the user's preferences live in
 # it — which choices they made about update checks, which fonts they asked never
 # to hear about again. Running the tests must not quietly reset those.
-PREFS_BACKUP=$(mktemp -d)/preferences.json
-[ -f "$CACHE/preferences.json" ] && cp "$CACHE/preferences.json" "$PREFS_BACKUP"
+STATE_BACKUP=$(mktemp -d)
+for f in preferences.json local-index.json; do
+  [ -f "$CACHE/$f" ] && cp "$CACHE/$f" "$STATE_BACKUP/$f"
+done
+# local-index.json matters as much as preferences.json: it is the record of the
+# permission-gated stashes, which only a deliberate `untofu folders --rescan`
+# can rebuild. Losing it leaves the agent quietly serving 544 faces instead of
+# 581 while the settings still say those folders are included — which is exactly
+# what happened after each release run before this.
 restore_prefs() {
-  if [ -f "$PREFS_BACKUP" ]; then
-    mkdir -p "$CACHE" && cp "$PREFS_BACKUP" "$CACHE/preferences.json"
-  fi
+  for f in preferences.json local-index.json; do
+    [ -f "$STATE_BACKUP/$f" ] && mkdir -p "$CACHE" && cp "$STATE_BACKUP/$f" "$CACHE/$f"
+  done
+  return 0
 }
 trap restore_prefs EXIT
 
