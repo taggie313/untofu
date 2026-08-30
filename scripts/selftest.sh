@@ -33,6 +33,13 @@ restore_prefs() {
   for f in preferences.json local-index.json; do
     [ -f "$STATE_BACKUP/$f" ] && mkdir -p "$CACHE" && cp "$STATE_BACKUP/$f" "$CACHE/$f"
   done
+  # Putting the files back is not enough. A running agent holds its index in
+  # memory, and the tests will have signalled it to reload at a moment when the
+  # cache was wiped — leaving it serving a degraded index, from a record that is
+  # now correct again, until something else happens to signal it. Observed after
+  # a release: the record held its 13 gated entries and `untofu status` computed
+  # 581, while the agent went on serving 544 and gated fonts substituted.
+  pkill -HUP -u "$(id -u)" -f 'untofu run' 2>/dev/null
   return 0
 }
 trap restore_prefs EXIT
