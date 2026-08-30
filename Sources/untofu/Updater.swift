@@ -5,9 +5,10 @@ import Foundation
 ///
 /// Never runs on its own unless the user has explicitly allowed it. An update
 /// check is a request to a server that discloses this Mac runs this tool, and a
-/// font agent has no business making that request unasked. So: every dialog
-/// carries a button that runs one check, on the spot, because the user pressed
-/// it; and the one-time offer at first launch is the only route to it happening
+/// font agent has no business making that request unasked. So: the
+/// unresolved-font dialog carries a button that runs one check, on the spot,
+/// because the user pressed it, and `untofu update` does the same from a shell;
+/// the one-time offer at first launch is the only route to it happening
 /// automatically.
 ///
 /// Homebrew users are covered by `brew upgrade` and mostly do not need this. The
@@ -94,9 +95,9 @@ enum Updater {
     /// The one-time offer to let update checks happen unprompted.
     ///
     /// Made once, ever, whatever the answer — `updateOfferMade` records that it
-    /// was asked, not what was said. Declining leaves every dialog's "Check for
-    /// Updates" button working, so saying no costs the user nothing except the
-    /// automatic part.
+    /// was asked, not what was said. Declining leaves the unresolved-font
+    /// dialog's "Check for Updates" button working, and `untofu update` too, so
+    /// saying no costs the user nothing except the automatic part.
     ///
     /// Delayed rather than shown the instant the agent launches: at login this
     /// process starts alongside everything the user actually wants to look at,
@@ -134,8 +135,9 @@ enum Updater {
         on it will ask GitHub once a week whether a newer version exists, which \
         tells GitHub that this Mac runs untofu.
 
-        Either way, every untofu dialog has a "Check for Updates" button that \
-        checks on the spot. You will only be asked this once.
+        Either way, the dialog untofu shows when it cannot find a font has a \
+        "Check for Updates" button, so you can check whenever you like. You will \
+        only be asked this once.
         """
         alert.alertStyle = .informational
         alert.icon = Icon.image()

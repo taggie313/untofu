@@ -345,8 +345,10 @@ font, and only that field tells them apart.
 
 **Update checks.** Off. An update check is a request to a server disclosing that
 this Mac runs this tool, and a font agent has no business making it unasked.
-Every panel has a *Check for Updates* button that runs one check because you
-pressed it, and `untofu update` does the same from the shell. You are asked once,
+The "couldn't find this font" dialog has a *Check for Updates* button that runs
+one check because you pressed it, and `untofu update` does the same from the
+shell. The other dialogs do not carry it — a success message and a send/cancel
+confirmation are not the place for it. You are asked once,
 90 seconds after first launch, whether it may also happen on its own; declining
 costs nothing but the automatic part. `untofu status` reports which you chose.
 

@@ -12,8 +12,9 @@ final class Preferences {
         ///
         /// Off. An update check is a request to a server carrying the fact that
         /// this Mac runs this tool, and nothing about a font manager justifies
-        /// making that happen behind the user's back. Every dialog offers the
-        /// check as a button; this only decides whether it also happens on its own.
+        /// making that happen behind the user's back. The unresolved-font dialog
+        /// offers the check as a button, and `untofu update` does it from a shell;
+        /// this only decides whether it also happens on its own.
         var updateChecksAllowed = false
 
         /// Whether the one-time offer to turn that on has been made. Asked once,
