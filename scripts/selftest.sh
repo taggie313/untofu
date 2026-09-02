@@ -438,7 +438,40 @@ echo "== index hygiene =="
 # so this has to put something in it rather than inherit from earlier tests.
 $BIN fetch Cardo-Regular >/dev/null 2>&1
 rm -f "$CACHE/fonts/"*.ttf
-check "$($BIN verify | grep -c 'dropped')" "1" "verify drops entries whose file vanished"
+
+# Assert the OUTCOME, not the announcement. This test used to be
+# `verify | grep -c dropped` == 1, which passed for a year while verify did
+# nothing at all: it removed the keys from its own memory, then persist() merged
+# its view *over* the file on disk — and a key you deleted is simply a key you do
+# not have, indistinguishable from one you never knew about — so every entry came
+# straight back, in memory and on disk. Running it twice printed the identical
+# "dropped 62 stale entries" both times.
+$BIN verify >/dev/null 2>&1
+check "$($BIN verify)" "index is clean" "verify actually drops entries, and stays dropped"
+check "$(python3 -c "
+import json,os
+try:
+    d=json.load(open(os.path.expanduser('$CACHE/index.json')))
+    print(1 if any('cardo' in k for k in d) else 0)
+except Exception: print(0)")" "0" "and the entry is gone from index.json, not just from memory"
+
+# A fetch stages downloads in the cache directory, and Cache.init sweeps stale
+# staging — in EVERY invocation, including `untofu --version`. It used to delete
+# every .incoming-* it found, so typing `untofu status` while the agent was
+# downloading deleted the agent's staging out from under it: the rest of that
+# fetch failed silently, fell through to markUnresolved, and told the user a
+# perfectly available Google font was commercial. Then stayed quiet for 6h.
+mkdir -p "$CACHE/fonts/.incoming-$$-live" \
+         "$CACHE/fonts/.incoming-99999-dead" \
+         "$CACHE/fonts/.incoming-oldstyle"
+$BIN --version >/dev/null 2>&1
+check "$([ -d "$CACHE/fonts/.incoming-$$-live" ] && echo 1 || echo 0)" "1" \
+      "a live process's staging survives another invocation's sweep"
+check "$([ -d "$CACHE/fonts/.incoming-99999-dead" ] && echo 1 || echo 0)" "0" \
+      "and staging from a dead process is still swept"
+check "$([ -d "$CACHE/fonts/.incoming-oldstyle" ] && echo 1 || echo 0)" "0" \
+      "as is staging from before pids were stamped"
+rm -rf "$CACHE/fonts/".incoming-* 2>/dev/null
 
 if [ "${1:-}" = "--with-keynote" ]; then
   echo

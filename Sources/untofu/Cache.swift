@@ -29,13 +29,54 @@ final class Cache {
         reload()
     }
 
-    /// Clears staging directories orphaned by a fetch that was killed mid-flight.
+    /// Name for a fetch's staging directory, carrying the pid that owns it.
+    ///
+    /// The pid is the whole point. Staging used to be `.incoming-<uuid>`, which
+    /// said nothing about whether anyone was still using it, so the sweep below
+    /// could only delete all of them or none.
+    static func scratchName() -> String { ".incoming-\(getpid())-\(UUID().uuidString)" }
+
+    /// Clears staging directories orphaned by a fetch that died mid-flight —
+    /// and *only* those.
+    ///
+    /// This runs from `init`, so it runs in every `untofu` invocation, including
+    /// `--version`. It used to delete every `.incoming-*` directory it found,
+    /// which meant typing `untofu status` while the agent was downloading a font
+    /// deleted the agent's staging area out from under it. Every subsequent
+    /// download in that fetch failed silently, the loop fell through to
+    /// `markUnresolved`, and the user was told a perfectly available Google font
+    /// was "a commercial or private font" — then not told again for six hours,
+    /// because the failure was cached.
+    ///
+    /// So a directory is only swept when the process that made it is gone.
+    /// `kill(pid, 0)` is the cheap liveness test; ESRCH means no such process.
     private func sweepScratch() {
         let contents = try? FileManager.default.contentsOfDirectory(
             at: fontsDir, includingPropertiesForKeys: nil)
         for url in contents ?? [] where url.lastPathComponent.hasPrefix(".incoming") {
+            guard let owner = Cache.scratchOwner(url.lastPathComponent) else {
+                // Unparseable, so from a version that did not stamp the pid.
+                // Nothing is using it — that scheme is gone — so it is safe.
+                try? FileManager.default.removeItem(at: url)
+                continue
+            }
+            guard !Cache.processIsAlive(owner) else { continue }
+            Log.debug("sweeping abandoned staging from pid \(owner)")
             try? FileManager.default.removeItem(at: url)
         }
+    }
+
+    /// pid out of `.incoming-<pid>-<uuid>`, or nil for the old unstamped form.
+    private static func scratchOwner(_ name: String) -> pid_t? {
+        let parts = name.split(separator: "-")
+        guard parts.count >= 3, let pid = pid_t(parts[1]) else { return nil }
+        return pid
+    }
+
+    private static func processIsAlive(_ pid: pid_t) -> Bool {
+        // 0 means it exists and we may signal it; EPERM means it exists and we
+        // may not — either way it is alive. Only ESRCH means gone.
+        kill(pid, 0) == 0 || errno == EPERM
     }
 
     // MARK: - Hot path
@@ -58,13 +99,20 @@ final class Cache {
     /// Records every face in a file, so fetching one weight satisfies its siblings.
     func record(_ file: FontFile) {
         let filename = file.url.lastPathComponent
+        var cleared = Set<String>()
         lock.lock()
         for name in file.postScriptNames {
             index[name.lowercased()] = filename
-            negative.removeValue(forKey: name.lowercased())
+            if negative.removeValue(forKey: name.lowercased()) != nil {
+                cleared.insert(name.lowercased())
+            }
         }
         lock.unlock()
-        persist()
+        // Same reason as verify(): clearing a negative entry is a deletion, and
+        // a merge cannot carry one. Harmless in practice today — a name in the
+        // index is answered before the negative cache is ever consulted — but
+        // it left a permanent "this failed" record for a font that succeeded.
+        persist(removingNegativeKeys: cleared)
     }
 
     func shouldAttempt(_ psName: String) -> Bool {
@@ -99,7 +147,10 @@ final class Cache {
             atPath: fontsDir.appendingPathComponent($0.value).path) }
         for key in stale.keys { index.removeValue(forKey: key) }
         lock.unlock()
-        if !stale.isEmpty { persist() }
+        // The removals have to be named explicitly: persist merges this
+        // process's view *over* what is on disk, and a key we deleted is simply
+        // a key we do not have — indistinguishable from one we never knew about.
+        if !stale.isEmpty { persist(removingIndexKeys: Set(stale.keys)) }
         return stale.count
     }
 
@@ -130,7 +181,8 @@ final class Cache {
     /// the login agent, or several concurrent fetches. Each holds its own
     /// in-memory view, so a blind overwrite silently drops whatever the others
     /// added — last writer wins and the rest of the work evaporates.
-    private func persist() {
+    private func persist(removingIndexKeys removedIndex: Set<String> = [],
+                         removingNegativeKeys removedNegative: Set<String> = []) {
         withFileLock {
             var mergedIndex = Cache.decode([String: String].self, from: indexURL) ?? [:]
             var mergedNegative = Cache.decode([String: Double].self, from: negativeURL) ?? [:]
@@ -143,6 +195,14 @@ final class Cache {
             // Ours wins on conflict: we just verified the file on disk.
             mergedIndex.merge(mineIndex) { _, mine in mine }
             mergedNegative.merge(mineNegative) { _, mine in mine }
+
+            // Deletions, which the merge above cannot express. Without this,
+            // `untofu verify` printed "dropped 62 stale entries", put them
+            // straight back from disk, and printed the identical 62 the next
+            // time it ran — a command that reported success and did nothing,
+            // guarded by a test that only checked it said the word "dropped".
+            for key in removedIndex { mergedIndex.removeValue(forKey: key) }
+            for key in removedNegative { mergedNegative.removeValue(forKey: key) }
 
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

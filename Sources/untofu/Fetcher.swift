@@ -39,7 +39,7 @@ enum Fetcher {
         // concurrently, and the first to finish would delete the staging area out
         // from under the others on its way out.
         let scratch = cache.fontsDir
-            .appendingPathComponent(".incoming-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent(Cache.scratchName(), isDirectory: true)
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
 
