@@ -43,6 +43,34 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 # shellcheck disable=SC2086
 tar -czf "$WORK/html.tgz" -C "$SITE" $ASSETS
 
+# Which node is the container actually on?
+#
+# CT 136 was on bb2 when this was written and is on bb1 now. A migration turns
+# the deploy into `can only push files to a running CT` — loud, correctly
+# non-zero, but only after release.sh has already tagged, notarised and
+# published, so the site is the one artifact left pointing at the old version.
+# PVE_HOST is therefore just an entry point into the cluster; the cluster is
+# asked where the container lives.
+PVE_USER="${PVE_HOST%%@*}"
+NODE=$(ssh -o ConnectTimeout=10 "$PVE_HOST" \
+        "pvesh get /cluster/resources --type vm --output-format json" 2>/dev/null \
+      | python3 -c "
+import json,sys
+try:
+    for r in json.load(sys.stdin):
+        if str(r.get('vmid')) == '$CTID' and r.get('status') == 'running':
+            print(r.get('node','')); break
+except Exception:
+    pass
+" 2>/dev/null) || NODE=""
+
+if [ -n "$NODE" ] && [ "$PVE_USER@$NODE" != "$PVE_HOST" ]; then
+  echo "==> CT $CTID has moved to $NODE (deploy.env says ${PVE_HOST#*@})"
+  PVE_HOST="$PVE_USER@$NODE"
+elif [ -z "$NODE" ]; then
+  echo "==> could not ask the cluster where CT $CTID is; trying $PVE_HOST as configured"
+fi
+
 echo "==> shipping to CT $CTID via $PVE_HOST"
 scp -q "$WORK/html.tgz" "$PVE_HOST:/tmp/untofu-html.tgz"
 ssh "$PVE_HOST" "pct push $CTID /tmp/untofu-html.tgz /tmp/untofu-html.tgz &&
