@@ -50,7 +50,9 @@ tar -czf "$WORK/html.tgz" -C "$SITE" $ASSETS
 # non-zero, but only after release.sh has already tagged, notarised and
 # published, so the site is the one artifact left pointing at the old version.
 # PVE_HOST is therefore just an entry point into the cluster; the cluster is
-# asked where the container lives.
+# asked where the container lives. Give it a NODE NAME, not an address — the
+# answer comes back as a node name, and comparing "bb2" against "100.81.33.74"
+# would report a move on every run.
 PVE_USER="${PVE_HOST%%@*}"
 NODE=$(ssh -o ConnectTimeout=10 "$PVE_HOST" \
         "pvesh get /cluster/resources --type vm --output-format json" 2>/dev/null \
