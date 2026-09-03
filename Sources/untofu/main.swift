@@ -389,10 +389,18 @@ case "explain":
         FileHandle.standardError.write(Data("explain needs a font name, e.g. \"Aptos Display\"\n".utf8))
         exit(1)
     }
-    let subject = positional[1]
+    // The name the provider would actually work with, so `explain` describes what
+    // would really happen rather than what the raw string looks like.
+    let rawSubject = positional[1]
+    guard let subject = Resolver.normalized(rawSubject) else {
+        print("name:        \(rawSubject)")
+        print("normalised:  refused — not a usable font name, nothing would be looked up")
+        break
+    }
+    if subject != rawSubject { print("normalised:  \(rawSubject)  ->  \(subject)") }
     print("name:        \(subject)")
     print("words:       \(Resolver.familyWords(for: subject).joined(separator: " · "))")
-    print("candidates:  \(Resolver.familyCandidates(for: subject).joined(separator: ", "))")
+    print("candidates:  \(Resolver.lookupSlugs(for: subject).joined(separator: ", "))")
     print("display:     \(Resolver.displayFamily(for: subject))")
     print("proprietary: \(Resolver.isKnownProprietary(subject) ? "yes — will not be fetched or reported" : "no")")
     print("cached:      \(cache.path(for: subject) ?? "no")")

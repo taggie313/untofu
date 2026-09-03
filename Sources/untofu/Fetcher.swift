@@ -42,9 +42,18 @@ enum Fetcher {
         resolve(psName: psName, into: cache, observer: observer).succeeded
     }
 
-    static func resolve(psName: String, into cache: Cache,
+    static func resolve(psName requested: String, into cache: Cache,
                         observer: Observer? = nil) -> Outcome {
-        let candidates = Resolver.familyCandidates(for: psName)
+        // Idempotent — the provider has already done this before its cache
+        // lookup, so a name arriving from there passes through untouched. It is
+        // here as well so the CLI and any future caller get it too: `untofu
+        // fetch "/fonts/inter/Inter Medium"` should behave the same as the
+        // request that produced that string.
+        guard let psName = Resolver.normalized(requested) else {
+            Log.info("\(requested.prefix(80)) is not a usable font name")
+            return .absent
+        }
+        let candidates = Resolver.lookupSlugs(for: psName)
         guard !candidates.isEmpty else { return .absent }
 
         // Skip families we know we can never supply. Nothing is fetched and,
@@ -67,6 +76,12 @@ enum Fetcher {
 
         // Tracks whether any lookup failed to happen, as opposed to answering no.
         var blocked: String?
+
+        // The plainest file that matched only by family name, kept in case
+        // nothing matches exactly. Weight-axis scoring, so this picks Regular
+        // over Bold, and Light over Black when a family has no Regular at all.
+        var bestCandidate: URL?
+        var bestPlainness: Int?
 
         for slug in candidates {
             for license in GoogleFonts.licenseDirs {
@@ -99,6 +114,39 @@ enum Fetcher {
                         try? FileManager.default.removeItem(at: local)
                         continue
                     }
+                    // How the file matched decides whether we can stop here.
+                    //
+                    // An exact name — nameID 6, or a variable font's named
+                    // instance — identifies one face and nothing else, so it is
+                    // the answer and we take it. A match on the shared FAMILY
+                    // name is much weaker: every face in a family carries it, so
+                    // a request for bare "Lato" is satisfied by Lato-Black.ttf
+                    // just as well as by Lato-Regular.ttf, and files arrive in
+                    // alphabetical order — Black before Bold before Regular.
+                    //
+                    // That is not hypothetical. 336 static-only families in ofl/
+                    // would have been cached as their Black or Bold face, written
+                    // into index.json, and served that way for good: a deck whose
+                    // theme font is Lato renders every run of body text in Lato
+                    // Black, and nothing ever re-evaluates it. LocalFonts already
+                    // guards exactly this with plainness scoring; the fetch path
+                    // did not.
+                    //
+                    // So on a family-only match, remember the plainest candidate
+                    // and keep looking for something better.
+                    if !parsed.exactNames.contains(where: { $0.lowercased() == psName.lowercased() }) {
+                        if parsed.plainness > (bestPlainness ?? Int.min) {
+                            if let previous = bestCandidate { try? FileManager.default.removeItem(at: previous) }
+                            bestPlainness = parsed.plainness
+                            bestCandidate = local
+                        } else {
+                            try? FileManager.default.removeItem(at: local)
+                        }
+                        Log.debug("\(file.name) matches \(psName) only by family "
+                                + "(plainness \(parsed.plainness)); still looking")
+                        continue
+                    }
+
                     // Reaching here means the file downloaded, parsed, and
                     // answers to the exact name asked for — the strongest
                     // evidence this tool can gather that the font exists. If
@@ -117,6 +165,22 @@ enum Fetcher {
                     return .fetched
                 }
             }
+        }
+
+        // Nothing answered to the exact name, but a family member did. Take the
+        // plainest one — that is what an application asking for a bare family
+        // wants, and it is the same judgement LocalFonts makes for the fonts
+        // already on the disk.
+        if let candidate = bestCandidate {
+            if let installed = adopt(candidate, into: cache) {
+                cache.record(installed)
+                Log.info("fetched \(psName) <- \(candidate.lastPathComponent) "
+                       + "(family match, plainness \(bestPlainness ?? 0); "
+                       + "\(installed.postScriptNames.count) face(s) indexed)")
+                observer?.resolved?(Resolver.displayFamily(for: psName))
+                return .fetched
+            }
+            blocked = "downloaded \(candidate.lastPathComponent) but could not install it"
         }
 
         // The distinction the whole type exists for. Marking a name unresolved

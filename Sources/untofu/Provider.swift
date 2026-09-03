@@ -69,14 +69,17 @@ final class Provider {
 
     /// The hot path. Runs on the provider's runloop with the requesting
     /// application's text layout blocked behind it.
-    fileprivate func handle(psName: String, pid: pid_t) -> String? {
+    fileprivate func handle(psName rawName: String, pid: pid_t) -> String? {
         // CoreText hands over an empty NSFontNameAttribute now and again — seen
         // in the wild as `miss   (pid 57443)`. Nothing downstream can do
         // anything with it, but left unchecked it still reserves an in-flight
         // slot and spawns a subprocess to name the requesting app.
-        guard !psName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            Log.debug("ignoring an empty font name from pid \(pid)")
+        guard let psName = Resolver.normalized(rawName) else {
+            Log.debug("ignoring an unusable font name from pid \(pid): \(rawName.prefix(80))")
             return nil
+        }
+        if psName != rawName {
+            Log.info("normalised \(rawName.prefix(60)) -> \(psName)  (pid \(pid))")
         }
 
         if let path = cache.path(for: psName) {

@@ -140,12 +140,12 @@ struct FontFile {
         let records = nameRecords(r, at: nameOffset)
 
         var parsed = ParsedNames()
-        parsed.subfamily = records[17] ?? records[2]         // typographic, then legacy
-        if let own = records[6] { parsed.exact.insert(own) } // nameID 6 = PostScript name
+        parsed.subfamily = records.best[17] ?? records.best[2]   // typographic, then legacy
+        if let own = records.best[6] { parsed.exact.insert(own) } // nameID 6 = PostScript name
         if let fvarOffset = fvarTable {
             // A named instance names one point in the design space, so it picks a
             // face as precisely as nameID 6 does.
-            parsed.exact.formUnion(instanceNames(r, at: fvarOffset, names: records))
+            parsed.exact.formUnion(instanceNames(r, at: fvarOffset, names: records.best))
         }
         var result = parsed.exact
 
@@ -154,23 +154,78 @@ struct FontFile {
         // font with no style, and matching only PostScript names rejects the very
         // file that satisfies it. Matching stays exact, so this cannot pull in an
         // unrelated family.
-        for nameID in [16, 1] {                              // typographic, then legacy
-            guard let family = records[UInt16(nameID)], !family.isEmpty else { continue }
+        //
+        // EVERY spelling, not just the preferred one. Scoring above decides what
+        // to *call* this face; it must not decide what the face can be *found*
+        // by. A Chinese-locale application asks for 宋体 and an English one asks
+        // for SimSun, and the file answers to both — so index both. Matching is
+        // exact, so extra spellings can never pull in an unrelated family.
+        var families = Set<String>()
+        for nameID in [16, 1] as [UInt16] {                  // typographic, then legacy
+            if let best = records.best[nameID] { families.insert(best) }
+            families.formUnion(records.alternates[nameID] ?? [])
+        }
+        for family in families where !family.isEmpty {
             result.insert(family)
             result.insert(squashed(family))
+
+            // "Inter Medium", the spaced display form. Applications ask this way
+            // constantly — it is what a font menu shows — and untofu indexed only
+            // "Inter-Medium" and bare "Inter". A real miss report arrived for
+            // Inter, a font that was fetchable the whole time under a spelling
+            // the requester did not use.
+            if let style = parsed.subfamily, !style.isEmpty,
+               style.lowercased() != "regular" {
+                result.insert("\(family) \(style)")
+                result.insert(squashed("\(family)\(style)"))
+            }
         }
         parsed.all = result
         return parsed
     }
 
-    /// nameID -> string, preferring the Windows/Unicode record when a nameID
-    /// appears on several platforms.
-    private static func nameRecords(_ r: Reader, at base: Int) -> [UInt16: String] {
-        guard let count = r.u16(base + 2), let storage = r.u16(base + 4) else { return [:] }
-        var out: [UInt16: String] = [:]
+    /// Every spelling of every nameID, plus which one to prefer.
+    struct NameTable {
+        /// The best spelling per nameID — English where the font has one.
+        var best: [UInt16: String] = [:]
+        /// Every spelling seen, including localized ones.
+        var alternates: [UInt16: Set<String>] = [:]
+    }
+
+    /// How much a `name` record is worth as *the* spelling of its nameID.
+    ///
+    /// This exists because "prefer platform 3" is not enough, and getting it
+    /// wrong was quietly catastrophic. Records are laid out sorted by platform,
+    /// encoding, language, nameID — so the English record (platform 3, langID
+    /// 0x0409) comes first and any localized record for the same nameID comes
+    /// later. "Last platform-3 record wins" therefore means "the localized name
+    /// always wins", and every font shipping a localized name lost its English
+    /// one before anything downstream could see it.
+    ///
+    /// Measured across the Office bundles and /System/Library/Fonts, 1574 faces:
+    /// nameID 1 resolved to a non-English string on 319 of them. SimHei.ttf sat
+    /// in the first directory untofu walks, indexed only as 黑体, so a document
+    /// asking for "SimHei" missed, burned lookups, and was told it was a
+    /// commercial font.
+    private static func nameScore(platform: UInt16, language: UInt16) -> Int {
+        switch (platform, language) {
+        case (3, 0x0409): return 100   // Windows, US English
+        case (1, 0):      return 90    // Macintosh, English
+        case (0, _):      return 80    // Unicode, no language of its own
+        case (3, _):      return 50    // Windows, localized
+        case (1, _):      return 40    // Macintosh, localized
+        default:          return 10
+        }
+    }
+
+    private static func nameRecords(_ r: Reader, at base: Int) -> NameTable {
+        guard let count = r.u16(base + 2), let storage = r.u16(base + 4) else { return NameTable() }
+        var table = NameTable()
+        var scores: [UInt16: Int] = [:]
         for i in 0..<Int(count) {
             let rec = base + 6 + 12 * i
             guard let platform = r.u16(rec),
+                  let language = r.u16(rec + 4),
                   let nameID = r.u16(rec + 6),
                   let length = r.u16(rec + 8),
                   let offset = r.u16(rec + 10),
@@ -183,9 +238,15 @@ struct FontFile {
             default: decoded = String(data: raw, encoding: .utf16BigEndian)
             }
             guard let value = decoded, !value.isEmpty else { continue }
-            if out[nameID] == nil || platform == 3 { out[nameID] = value }
+
+            table.alternates[nameID, default: []].insert(value)
+            let score = nameScore(platform: platform, language: language)
+            if score > (scores[nameID] ?? Int.min) {
+                scores[nameID] = score
+                table.best[nameID] = value
+            }
         }
-        return out
+        return table
     }
 
     /// PostScript names of a variable font's named instances.
@@ -231,6 +292,10 @@ struct FontFile {
                let subfamilyID = r.u16(rec),
                let style = names[subfamilyID], !style.isEmpty {
                 out.insert("\(squashed(family))-\(squashed(style))")
+                // And the spaced display form. A font menu shows "Inter Medium",
+                // so that is what applications ask for; indexing only the
+                // hyphenated spelling meant a fetchable font looked missing.
+                out.insert("\(family) \(style)")
             }
         }
         return out

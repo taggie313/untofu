@@ -20,6 +20,18 @@ PASS=0; FAIL=0
 # Several sections wipe the cache directory, and the user's preferences live in
 # it — which choices they made about update checks, which fonts they asked never
 # to hear about again. Running the tests must not quietly reset those.
+# The Homebrew-managed agent shares every state file this suite manipulates, and
+# it is not necessarily the build under test — during a version bump it is the
+# PREVIOUS one, which will happily discard a record it does not understand and
+# rewrite its own. That produced four failures that had nothing to do with the
+# code being tested. Stop it for the duration and put it back on the way out.
+BREW_SVC_WAS_RUNNING=0
+if brew services list 2>/dev/null | grep -qE '^untofu +started'; then
+  BREW_SVC_WAS_RUNNING=1
+  brew services stop untofu >/dev/null 2>&1
+  sleep 1
+fi
+
 STATE_BACKUP=$(mktemp -d)
 for f in preferences.json local-index.json; do
   [ -f "$CACHE/$f" ] && cp "$CACHE/$f" "$STATE_BACKUP/$f"
@@ -29,6 +41,11 @@ done
 # can rebuild. Losing it leaves the agent quietly serving 544 faces instead of
 # 581 while the settings still say those folders are included — which is exactly
 # what happened after each release run before this.
+restore_all() {
+  [ "$BREW_SVC_WAS_RUNNING" = "1" ] && brew services start untofu >/dev/null 2>&1
+  return 0
+}
+
 restore_prefs() {
   for f in preferences.json local-index.json; do
     [ -f "$STATE_BACKUP/$f" ] && mkdir -p "$CACHE" && cp "$STATE_BACKUP/$f" "$CACHE/$f"
@@ -48,7 +65,7 @@ restore_prefs() {
   pkill -f 'untofu-selftest-fake' 2>/dev/null
   return 0
 }
-trap restore_prefs EXIT
+trap 'restore_prefs; restore_all' EXIT
 
 ok()   { echo "  PASS  $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL  $1"; FAIL=$((FAIL+1)); }
@@ -182,6 +199,44 @@ check "$(proprietary 'Aptos Display')" "1" "with no catalogue, still suppresses 
 # suppression silently disables the tool. Asserted so the trade-off is visible.
 check "$(proprietary 'MS Outlook')" "0" "with no catalogue, the word rule stands down for MS Outlook"
 check "$(proprietary 'MS Reference Specialty')" "1" "but a literal slug is suppressed regardless"
+
+echo
+echo "== name forms =="
+# All four of these are fonts untofu could serve and did not, which is the worst
+# kind of bug this tool has: it is wrong about a font it already holds.
+
+# Localized name records used to overwrite the English ones, because the record
+# loop kept "last platform-3 wins" and never looked at languageID. Records are
+# sorted with English first, so the localized name always won and the English one
+# was discarded before anything downstream saw it. Measured across the Office
+# bundles and /System/Library/Fonts: 319 of 1574 faces lost their English nameID 1.
+if [ -d "/Applications/Microsoft Excel.app/Contents/Resources/DFonts" ]; then
+  localname() { $BIN explain "$1" | sed -n 's/^local: *//p'; }
+  for n in SimHei KaiTi FangSong SimSun DengXian; do
+    check "$(localname "$n" | grep -c 'Microsoft Office')" "1" "the English name '$n' resolves"
+  done
+  # ...and the localized spelling must keep working: scoring decides what to CALL
+  # a face, not what it can be FOUND by.
+  check "$(localname '黑体' | grep -c 'Microsoft Office')" "1" "and the localized spelling still resolves"
+else
+  echo "  SKIP  CJK name tests (Microsoft Excel is not installed)"
+fi
+
+# A URL path arriving where a family belongs. Reported from the wild as
+# "/fonts/inter/Inter Medium" — a page naming its self-hosted webfont — which
+# untofu slugged to "fontsinterintermedium" and then declared missing.
+check "$($BIN explain '/fonts/inter/Inter Medium' | grep -c 'normalised.*-> *Inter Medium')" "1" \
+      "a path arriving as a font name is reduced to the name"
+check "$($BIN explain 'Inter([bad])' | grep -c 'refused')" "1" \
+      "and a name with reserved characters is refused outright"
+
+# Spaced display form. A font menu shows "Inter Medium", so that is what
+# applications ask for, and google/fonts has ofl/inter — not ofl/intermedium.
+check "$($BIN explain 'Inter Medium' | grep -c 'intermedium, inter')" "1" \
+      "a spaced Family Style name also tries the family alone"
+# ...without letting a real two-word family degrade to its first word.
+check "$($BIN explain 'Playfair Display' | grep -c 'playfairdisplay, playfair')" "1" \
+      "a genuinely two-word family tries its full spelling first"
 
 echo
 echo "== local fonts =="
@@ -321,12 +376,21 @@ if [ "$($BIN folders | grep -c '^Also searched')" = "1" ]; then
 
   # Degrade the record IN PLACE and say nothing. In place matters: a vnode watch
   # on the directory would miss this, which is why the watch polls instead.
+  # Drop half the entries, not just the gated ones. Removing "the gated entries"
+  # is a no-op whenever there are none, and then both writes are byte-identical:
+  # same size, same second, so the size+mtime fingerprint cannot see the second
+  # one and the test fails while proving nothing about the watch. Halving always
+  # changes the file.
   python3 -c "
 import json
 p='$CACHE/local-index.json'
 d=json.load(open(p))
-d['files']={k:v for k,v in d['files'].items() if not v['gated']}
+keys=sorted(d['files'])[:max(1, len(d['files'])//2)]
+d['files']={k:d['files'][k] for k in keys}
 json.dump(d, open(p,'w'))"
+  # ...and prove the mutation was real, so a no-op can never masquerade as a pass.
+  check "$([ "$(wc -c < "$CACHE/local-index.json")" -ne "$(wc -c < "$CACHE/.watch-good.json")" ] && echo 1 || echo 0)" "1" \
+        "the record really did change size before the watch is judged"
   # Wait for the count to reach N rather than sleeping a fixed time and
   # asserting. The poll runs every 2s with leeway, and a fixed sleep made this
   # flaky enough to abort a release: the suite passed standalone and failed

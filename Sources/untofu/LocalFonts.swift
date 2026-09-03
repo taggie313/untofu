@@ -155,7 +155,16 @@ final class LocalFonts {
         let files: [String: Entry]
     }
 
-    private static let snapshotVersion = 3
+    /// Bumped whenever the SHAPE of Entry changes — and also whenever the
+    /// PARSER changes, which is less obvious and was nearly missed.
+    ///
+    /// The snapshot is keyed by path, size and modification date, so a font file
+    /// that has not changed is never re-read. That is the whole point of it, and
+    /// it means a fix to how fonts are *parsed* reaches nobody: every existing
+    /// install would go on serving name sets produced by the old code. Version 4
+    /// is the CJK name-record fix — without this line it would have shipped and
+    /// silently done nothing for anyone who had ever run the tool before.
+    private static let snapshotVersion = 4
 
     /// What to do about the font stashes macOS gates behind a permission prompt.
     ///
@@ -342,7 +351,12 @@ final class LocalFonts {
         })
         _ = faces
 
-        LocalFonts.saveSnapshot(current)
+        // Never write over a record a newer build owns; see snapshotIsFromNewerBuild.
+        if LocalFonts.snapshotIsFromNewerBuild() {
+            Log.debug("not saving: local-index.json belongs to a newer build")
+        } else {
+            LocalFonts.saveSnapshot(current)
+        }
         rememberSnapshotFingerprint()
 
         Log.debug("local index: \(faceCount) face(s) from \(fileCount) walked "
@@ -443,12 +457,56 @@ final class LocalFonts {
         lock.lock(); lastFingerprint = current; lock.unlock()
     }
 
+    /// True when the file on disk was written by a NEWER build than this one.
+    ///
+    /// An old binary must not overwrite a new binary's record. During an upgrade
+    /// both exist at once — `brew upgrade` leaves the previous agent running, by
+    /// design — and without this the old agent reads a format it does not
+    /// understand, discards it, and rewrites its own, purging the gated entries
+    /// that only a foreground rescan can rebuild. It then does it again every
+    /// time the new CLI writes. Observed exactly that while bumping to v4.
+    ///
+    /// This build cannot fix the one already installed, but it stops the same
+    /// thing happening on every future bump.
+    private static func snapshotIsFromNewerBuild() -> Bool {
+        guard let data = try? Data(contentsOf: snapshotURL),
+              let decoded = try? JSONDecoder().decode(Snapshot.self, from: data)
+        else { return false }
+        return decoded.version > snapshotVersion
+    }
+
     private static func loadSnapshot() -> [String: Entry] {
         guard let data = try? Data(contentsOf: snapshotURL),
-              let decoded = try? JSONDecoder().decode(Snapshot.self, from: data),
-              decoded.version == snapshotVersion
+              let decoded = try? JSONDecoder().decode(Snapshot.self, from: data)
         else { return [:] }
-        return decoded.files
+        guard decoded.version != snapshotVersion else { return decoded.files }
+
+        if decoded.version > snapshotVersion {
+            Log.warn("local-index.json was written by a newer untofu (v\(decoded.version) "
+                   + "> v\(snapshotVersion)); leaving it alone. Restart the agent so both "
+                   + "sides are the same build.")
+            return [:]
+        }
+
+        // An older snapshot. Everything in it was parsed by older code, so it all
+        // has to be read again — except that the gated entries CANNOT be read
+        // again. Only a deliberate, foreground `untofu folders --rescan` may open
+        // those directories, so discarding them would quietly cost an opted-in
+        // user their Adobe and Office cloud fonts on upgrade, with nothing but a
+        // line in `status` to explain where they went.
+        //
+        // So keep the gated entries and drop the rest. Their names are whatever
+        // the old parser produced — stale, but serving a font under an old
+        // spelling beats not serving it — and `--rescan` refreshes them properly.
+        let carried = decoded.files.filter { $0.value.gated }
+        if carried.isEmpty {
+            Log.debug("snapshot v\(decoded.version) discarded; re-reading everything")
+        } else {
+            Log.info("snapshot v\(decoded.version) is stale: re-reading what can be read, "
+                   + "carrying \(carried.count) entr\(carried.count == 1 ? "y" : "ies") from "
+                   + "permission-gated folders (`untofu folders --rescan` refreshes those)")
+        }
+        return carried
     }
 
     private static func saveSnapshot(_ files: [String: Entry]) {

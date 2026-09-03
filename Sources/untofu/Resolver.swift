@@ -12,6 +12,42 @@ enum Resolver {
     /// Tokens that group a family into roman/italic halves rather than naming it.
     private static let groupingSuffixes = ["Roman", "Italic", "Upright"]
 
+    /// The name an application actually meant, or nil if it cannot be one.
+    ///
+    /// A real miss report arrived for `/fonts/inter/Inter Medium`. That is a URL
+    /// path where a font family belongs — some page's CSS naming its self-hosted
+    /// webfont — and untofu forwarded it whole, slugged it to
+    /// `fontsinterintermedium`, spent lookups on that, and told the user Inter
+    /// could not be found. Inter is on Google Fonts and was fetchable the entire
+    /// time.
+    ///
+    /// Everything before the last separator is the page's problem. The last
+    /// component usually is a real name, so take it and carry on. Names carrying
+    /// characters that no PostScript or family name may contain are refused
+    /// outright rather than guessed at.
+    ///
+    /// Applied at the top of the provider callback, before the cache is
+    /// consulted, so the lookup and any later fetch agree on one spelling —-
+    /// normalising only in the fetch path would cache the font under a name the
+    /// application never asks for.
+    static func normalized(_ psName: String) -> String? {
+        var name = psName.trimmingCharacters(in: .whitespacesAndNewlines)
+        for separator in ["/", "\\"] where name.contains(separator) {
+            name = name.components(separatedBy: separator).last ?? name
+        }
+        name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 128 else { return nil }
+
+        // Delimiters reserved by the PostScript language, plus anything
+        // unprintable. A font asking to be found under one of these is not a
+        // font request that can be honoured.
+        let forbidden: Set<Character> = ["(", ")", "<", ">", "[", "]", "{", "}", "%"]
+        guard !name.contains(where: { forbidden.contains($0) || $0.isNewline
+                                      || $0.unicodeScalars.contains(where: { s in s.value < 0x20 }) })
+        else { return nil }
+        return name
+    }
+
     static func familyCandidates(for psName: String) -> [String] {
         let trimmed = psName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
@@ -28,6 +64,33 @@ enum Resolver {
 
         var seen = Set<String>()
         return candidates.map(slug).filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
+    /// Directories worth *asking GitHub about*, widest sensible search last.
+    ///
+    /// Deliberately separate from `familyCandidates`, which is also what
+    /// `isKnownProprietary` reasons over. Adding the shorter runs to that list
+    /// broke the proprietary veto immediately and loudly: "Courier Prime" gained
+    /// "courier" as a candidate, "courier" is in the never-fetchable set, and a
+    /// real Google family became permanently unfetchable. Widening where we
+    /// *look* must not widen what we *refuse*.
+    ///
+    /// "Inter Medium" is a family and a style. google/fonts has ofl/inter, not
+    /// ofl/intermedium, so the spaced display form that applications actually use
+    /// found nothing. The full spelling is always tried first, so "Playfair
+    /// Display" still matches ofl/playfairdisplay before ofl/playfair is
+    /// considered — and whatever is downloaded still has to answer to the exact
+    /// name asked for before it is cached.
+    static func lookupSlugs(for psName: String) -> [String] {
+        var slugs = familyCandidates(for: psName)
+        let words = familyWords(for: psName)
+        if words.count > 1 {
+            for length in stride(from: words.count - 1, through: 1, by: -1) {
+                slugs.append(words.prefix(length).joined())
+            }
+        }
+        var seen = Set<String>()
+        return slugs.filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 
     /// Google's font directories are lowercase and stripped of punctuation:
