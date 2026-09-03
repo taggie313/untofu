@@ -117,7 +117,13 @@ case "run":
         not a bug in it. Missing fonts will now behave exactly as they did before
         untofu was installed. Run `untofu uninstall` to remove the agent.
         """)
-        exit(3)
+        // Zero, deliberately. This is the tool reaching the end of its life, not
+        // failing at something — and the launchers keep the agent alive only
+        // across *unsuccessful* exits, so a non-zero status here would have
+        // launchd restart it every ten seconds forever, writing that paragraph
+        // to the log each time. `untofu status` still exits 3, because there the
+        // caller asked a question and wants the answer in $?.
+        exit(0)
     }
 
     try? String(getpid()).write(to: LaunchAgent.pidURL, atomically: true, encoding: .utf8)

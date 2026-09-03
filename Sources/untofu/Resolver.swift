@@ -62,6 +62,19 @@ enum Resolver {
         "georgia", "verdana", "tahoma", "trebuchetms", "comicsansms", "impact",
         "webdings", "wingdings", "wingdings2", "wingdings3", "symbol",
         "msgothic", "msmincho", "simsun", "malgungothic",
+        // Microsoft's icon and symbol faces, which turn up as real font requests
+        // and are the opposite of fetchable: they are UI glyph sets, not
+        // typefaces anyone publishes. Reported from the wild — "HoloLens MDL2
+        // Assets" three times and "MS Outlook" once — each producing a dialog
+        // telling the user to go and buy an icon font.
+        //
+        // "ms" is deliberately the bare vendor prefix: it is never a family on
+        // its own (the word rule needs two words), and it catches MS Outlook,
+        // MS PGothic, MS Reference Specialty and the rest in one entry. Google's
+        // "Ms Madi" starts with the same word and is protected by the catalogue
+        // veto, exactly as "Courier Prime" is.
+        "ms", "hololens", "mdl2assets", "segoefluenticons", "segoemdl2assets",
+        "bookshelfsymbol", "mtextra", "msreferencespecialty",
         // Apple system faces
         "helvetica", "helveticaneue", "sfpro", "sfprotext", "sfprodisplay",
         "sfmono", "sfnsdisplay", "sfnstext", "geneva", "monaco", "menlo",

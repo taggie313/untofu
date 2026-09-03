@@ -252,7 +252,11 @@ final class LocalFonts {
     /// is sitting in Excel's bundle" is a resolver bug, and an entirely
     /// different thing from a font nobody publishes.
     func relative(of psName: String) -> String? {
-        guard let first = Resolver.familyWords(for: psName).first, !first.isEmpty else { return nil }
+        let words = Resolver.familyWords(for: psName)
+        guard let first = words.first, !first.isEmpty,
+              !LocalFonts.vendorPrefixes.contains(first) || words.count == 1
+        else { return nil }
+
         lock.lock(); defer { lock.unlock() }
         // Sorted, so the answer does not change between runs for no reason.
         for name in index.keys.sorted() {
@@ -261,6 +265,15 @@ final class LocalFonts {
         }
         return nil
     }
+
+    /// First words that identify a vendor rather than a family.
+    ///
+    /// Matching on one of these is worse than not matching at all. A real report
+    /// came back saying "MS Outlook" was found locally because "MS Reference
+    /// Sans Serif" is on the disk — they share nothing but the vendor prefix, so
+    /// the dialog offered the user a meaningless consolation and the miss report
+    /// carried `found_locally: true` about a font that is nowhere on the machine.
+    private static let vendorPrefixes: Set<String> = ["ms", "microsoft", "adobe", "apple", "google"]
 
     /// Walks the stashes and reads what it has not read before. Blocking —
     /// callers run it on a background queue, never from the provider callback.

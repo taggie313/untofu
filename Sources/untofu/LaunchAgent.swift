@@ -54,7 +54,12 @@ enum LaunchAgent {
             "Label": label,
             "ProgramArguments": [installedBinary.path, "run"],
             "RunAtLoad": true,
-            "KeepAlive": true,
+            // Restart on a crash, but NOT on a clean exit. `untofu run` exits 0
+            // when the CoreText hook is gone — the documented end of this
+            // tool's life — and plain `KeepAlive: true` would turn that into a
+            // permanent respawn loop, relaunching every ten seconds forever on
+            // a macOS where the tool cannot work at all.
+            "KeepAlive": ["SuccessfulExit": false],
             "ProcessType": "Background",
             "StandardOutPath": logURL.path,
             "StandardErrorPath": logURL.path,

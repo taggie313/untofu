@@ -67,7 +67,10 @@ class Untofu < Formula
 
   service do
     run [opt_bin/"untofu", "run"]
-    keep_alive true
+    # Restart on a crash, not on a clean exit: `untofu run` exits 0 when the
+    # CoreText hook is gone, and plain `keep_alive true` would respawn it every
+    # ten seconds forever on a macOS where it cannot work.
+    keep_alive successful_exit: false
     log_path var/"log/untofu.log"
     error_log_path var/"log/untofu.log"
   end

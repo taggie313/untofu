@@ -127,6 +127,7 @@ done
 
 check "$(proprietary 'Playfair Display')" "0" "does not suppress an ordinary two-word family"
 
+
 # The catalogue veto. "Courier Prime" is a genuine Google family that starts with
 # a proprietary one, so it is the case a naive prefix match gets wrong. Planted
 # rather than downloaded: the assertion is about the veto, not about GitHub being
@@ -135,10 +136,23 @@ FAMILIES="$CACHE/families.json"
 mkdir -p "$CACHE"
 # The timestamp is not read back: the veto deliberately ignores the freshness
 # check so it can never trigger a network fetch of its own.
-echo '{"fetched":0,"slugs":["courierprime","playfairdisplay","librebaskerville"]}' > "$FAMILIES"
+echo '{"fetched":0,"slugs":["courierprime","playfairdisplay","librebaskerville","msmadi"]}' > "$FAMILIES"
 check "$(proprietary 'Courier Prime')"     "0" "catalogue vetoes suppression of Courier Prime"
 check "$(proprietary 'Libre Baskerville')" "0" "catalogue vetoes suppression of Libre Baskerville"
 check "$(proprietary 'Aptos Display')"     "1" "a sub-family the catalogue lacks is still suppressed"
+
+# Reported from the wild against 0.4.3/0.4.4: Microsoft ships icon and symbol
+# faces that arrive as ordinary font requests and are the opposite of fetchable.
+# Each produced a dialog telling the user to go and buy an icon font. These need
+# the catalogue present, because all but one are caught by the whole-word rule
+# rather than by a literal slug — which is exactly the fail-open behaviour
+# asserted below.
+for name in "HoloLens MDL2 Assets" "MS Outlook" "MS Reference Specialty" "MS PGothic"; do
+  check "$(proprietary "$name")" "1" "suppresses the symbol font '$name'"
+done
+# "ms" is in the set as a bare vendor prefix, so the catalogue veto is the only
+# thing standing between Google's "Ms Madi" and being silently unfetchable.
+check "$(proprietary 'Ms Madi')" "0" "catalogue veto protects Ms Madi from the 'ms' prefix"
 
 # A cold install has no catalogue to consult. Suppressing on a guess would
 # silently disable the one thing this tool does, so the word rule stands down —
@@ -146,6 +160,11 @@ check "$(proprietary 'Aptos Display')"     "1" "a sub-family the catalogue lacks
 rm -f "$FAMILIES"
 check "$(proprietary 'Courier Prime')" "0" "with no catalogue, does not suppress Courier Prime either"
 check "$(proprietary 'Aptos Display')" "1" "with no catalogue, still suppresses Aptos Display"
+# ...but a name caught only by the whole-word rule is NOT suppressed without a
+# catalogue to veto against. Deliberate: a spurious dialog is noise, a spurious
+# suppression silently disables the tool. Asserted so the trade-off is visible.
+check "$(proprietary 'MS Outlook')" "0" "with no catalogue, the word rule stands down for MS Outlook"
+check "$(proprietary 'MS Reference Specialty')" "1" "but a literal slug is suppressed regardless"
 
 echo
 echo "== local fonts =="
@@ -182,6 +201,14 @@ elif [ -s "$LOCALSRC" ]; then
         "--rescan reads the gated folders and finds it"
 
   # ...and from then on it is served without those folders being opened again.
+  # A vendor prefix is not a family. A real miss report came back claiming
+  # "MS Outlook" was found locally because "MS Reference Sans Serif" is on the
+  # disk — they share nothing but the two letters, so the dialog offered a
+  # meaningless consolation and the report carried found_locally: true about a
+  # font that is nowhere on the machine.
+  check "$($BIN explain 'MS Outlook' | grep -c '^local: *not found')" "1" \
+        "a shared vendor prefix does not count as a relative"
+
   check "$($BIN local | grep -c 'never opened by this process')" "1" \
         "later runs serve it from the record, without opening anything gated"
   check "$($BIN local | grep -c 'served from the recorded index')" "1" \

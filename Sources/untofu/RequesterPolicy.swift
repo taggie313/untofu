@@ -84,6 +84,27 @@ enum RequesterPolicy {
     /// the problem without saying anything about where this user keeps their
     /// software, which the executable path would.
     static func bundleIdentifier(_ pid: pid_t) -> String? {
-        NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        if let direct = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier {
+            return direct
+        }
+        // NSRunningApplication only knows about *applications*, and the process
+        // that asks for a font is very often a helper — a font worker or an XPC
+        // service living inside an app bundle. It returned nil for every miss
+        // report received in the wild, so the one field that says which app hit
+        // the problem was always empty. Walk up to the enclosing .app instead.
+        guard let path = executablePath(pid) else { return nil }
+        var url = URL(fileURLWithPath: path)
+        while url.pathComponents.count > 1 {
+            url.deleteLastPathComponent()
+            guard url.pathExtension == "app" else { continue }
+            let plist = url.appendingPathComponent("Contents/Info.plist")
+            guard let data = try? Data(contentsOf: plist),
+                  let info = try? PropertyListSerialization.propertyList(
+                      from: data, options: [], format: nil) as? [String: Any],
+                  let identifier = info["CFBundleIdentifier"] as? String
+            else { continue }
+            return identifier
+        }
+        return nil
     }
 }
