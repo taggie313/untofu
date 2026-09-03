@@ -475,7 +475,7 @@ python3 "$CACHE/untofu-selftest-fake2.py" 8763 500 >/dev/null 2>&1 & FAKEDL=$!
 sleep 1
 check "$(kind_probe http://127.0.0.1:8763)" "2:clean" \
       "a good listing whose download 5xxs is not a miss either"
-kill $FAKEDL 2>/dev/null
+kill $FAKEDL 2>/dev/null; wait $FAKEDL 2>/dev/null
 rm -f "$CACHE/untofu-selftest-fake2.py"
 
 # And the strongest evidence gets the harshest treatment if install failure is
@@ -500,7 +500,7 @@ print('poisoned' if any('karla' in k for k in d) else 'clean')")
 check "$INSTALL_RC:$INSTALL_NEG" "2:clean" \
       "a font that downloads and verifies but cannot be installed is not a miss"
 
-kill $FAKE403 $FAKE404 2>/dev/null
+kill $FAKE403 $FAKE404 2>/dev/null; wait $FAKE403 $FAKE404 2>/dev/null
 rm -f "$FAKE_PY"
 
 echo
@@ -556,12 +556,22 @@ for _ in $(seq 1 90); do [ "$(conc_present)" -ge 6 ] && break; sleep 1; done
 
 check "$(conc_present)" "6" "a burst of six distinct misses all reach the index"
 CONC_ORPHAN=0
+CONC_DETAIL=""
 for f in $CONC_FONTS; do
   key=$(echo "$f" | tr 'A-Z' 'a-z')
   file=$($BIN list 2>/dev/null | awk -v k="^  $key  ->" '$0 ~ k {print $3}')
-  [ -n "$file" ] && [ ! -f "$CACHE/fonts/$file" ] && CONC_ORPHAN=$((CONC_ORPHAN+1))
+  if [ -n "$file" ] && [ ! -f "$CACHE/fonts/$file" ]; then
+    CONC_ORPHAN=$((CONC_ORPHAN+1))
+    CONC_DETAIL="$CONC_DETAIL
+        $key -> $file (absent)"
+  fi
 done
 check "$CONC_ORPHAN" "0" "and every one of them points at a file that exists"
+if [ "$CONC_ORPHAN" != "0" ]; then
+  echo "        --- orphans ---$CONC_DETAIL"
+  echo "        --- fontsDir actually contains ---"
+  ls -1 "$CACHE/fonts" 2>/dev/null | sed 's/^/          /'
+fi
 kill $CONC_AGENT 2>/dev/null; wait $CONC_AGENT 2>/dev/null
 
 echo
@@ -584,9 +594,31 @@ HTML
   $BIN run -q -v > "$BWORK/d.log" 2>&1 &
   BD=$!
   sleep 2
-  "$CHROME" --user-data-dir=/tmp/ff-selftest-chrome --no-first-run \
-            --no-default-browser-check "file://$BWORK/local.html" >/dev/null 2>&1 &
-  sleep 18
+  # Headless, and the OLD --headless deliberately. This used to launch a visible
+  # Chrome window and sleep 18 seconds, every run of the suite. Measured on
+  # Chrome 152:
+  #   --headless      --dump-dom             hook fires, 1.5s, exits by itself
+  #   --headless=new  --screenshot           hook does NOT fire — silently useless
+  #   --headless=new  --virtual-time-budget  hook fires but never exits
+  # --dump-dom forces load and layout and then quits, so no sleep is needed at
+  # all. If Chrome ever drops the old --headless this test FAILS rather than
+  # passing quietly, because it asserts the hook actually fired.
+  #
+  # Backgrounded and polled rather than waited on. Chrome exits by itself in
+  # 1.5s in isolation but took the full ceiling inside the suite, so waiting for
+  # it to quit made the test SLOWER than the visible-window version it replaced.
+  # What we actually care about is whether the hook fired, so watch for that and
+  # stop the moment it is observed — typically a second or two. If it never
+  # fires, we spend the ceiling and then fail, which is the right outcome.
+  "$CHROME" --headless --disable-gpu \
+        --user-data-dir=/tmp/ff-selftest-chrome --no-first-run \
+        --no-default-browser-check --dump-dom "file://$BWORK/local.html" >/dev/null 2>&1 &
+  CHROME_PID=$!
+  for _ in $(seq 1 30); do
+    grep -q 'declined, Google Chrome' "$BWORK/d.log" && break
+    sleep 1
+  done
+  kill $CHROME_PID 2>/dev/null; wait $CHROME_PID 2>/dev/null
   check "$(grep -c 'declined, Google Chrome' "$BWORK/d.log")" "1" "a Chromium local() lookup is declined"
   check "$($BIN list | grep -ci manrope)" "0" "and the font is not downloaded"
   pkill -f 'user-data-dir=/tmp/ff-selftest-chrome' 2>/dev/null

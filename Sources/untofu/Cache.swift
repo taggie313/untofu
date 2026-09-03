@@ -19,6 +19,20 @@ final class Cache {
     private var index: [String: String] = [:]      // lowercased PostScript name -> filename
     private var negative: [String: Date] = [:]     // lowercased PostScript name -> last failure
 
+    /// What this process has added but not yet written out.
+    ///
+    /// persist() has to satisfy two things that pull against each other: it must
+    /// not lose an entry another thread added while it was writing, and it must
+    /// not resurrect an entry that is deliberately gone from disk. Publishing
+    /// the whole in-memory map solves the first and breaks the second — a
+    /// running agent would quietly restore an index full of dead paths after
+    /// someone cleared the cache directory. Publishing only what is pending
+    /// solves both: a concurrent add is still pending, so either this call
+    /// carries it or its own persist does, while everything already published
+    /// takes its truth from the file.
+    private var pendingIndex: [String: String] = [:]
+    private var pendingNegative: [String: Double] = [:]
+
     var fontsDir: URL { Cache.root.appendingPathComponent("fonts", isDirectory: true) }
     private var indexURL: URL { Cache.root.appendingPathComponent("index.json") }
     private var negativeURL: URL { Cache.root.appendingPathComponent("negative.json") }
@@ -103,6 +117,7 @@ final class Cache {
         lock.lock()
         for name in file.postScriptNames {
             index[name.lowercased()] = filename
+            pendingIndex[name.lowercased()] = filename
             if negative.removeValue(forKey: name.lowercased()) != nil {
                 cleared.insert(name.lowercased())
             }
@@ -125,6 +140,7 @@ final class Cache {
     func markUnresolved(_ psName: String) {
         lock.lock()
         negative[psName.lowercased()] = Date()
+        pendingNegative[psName.lowercased()] = Date().timeIntervalSince1970
         lock.unlock()
         persist()
     }
@@ -194,9 +210,14 @@ final class Cache {
             var mergedIndex = Cache.decode([String: String].self, from: indexURL) ?? [:]
             var mergedNegative = Cache.decode([String: Double].self, from: negativeURL) ?? [:]
 
+            // Only what has not been published yet, and clear it in the same
+            // critical section so a concurrent add either lands in this batch or
+            // stays pending for its own.
             lock.lock()
-            let mineIndex = index
-            let mineNegative = negative.mapValues { $0.timeIntervalSince1970 }
+            let mineIndex = pendingIndex
+            let mineNegative = pendingNegative
+            pendingIndex = [:]
+            pendingNegative = [:]
             lock.unlock()
 
             // Ours wins on conflict: we just verified the file on disk.
@@ -240,11 +261,14 @@ final class Cache {
             // Harmless while the resolve queue was serial. It becomes the normal
             // case the moment more than one fetch runs at a time, which is why it
             // is fixed before widening rather than after.
+            // Adopt the file as the truth, then put back anything that became
+            // pending while the write was in flight — that, and only that, is
+            // what this process knows and the file does not.
             lock.lock()
-            index.merge(mergedIndex) { mine, _ in mine }
-            negative.merge(mergedNegative.mapValues { Date(timeIntervalSince1970: $0) }) { mine, _ in mine }
-            for key in removedIndex { index.removeValue(forKey: key) }
-            for key in removedNegative { negative.removeValue(forKey: key) }
+            index = mergedIndex
+            negative = mergedNegative.mapValues { Date(timeIntervalSince1970: $0) }
+            for (key, value) in pendingIndex { index[key] = value }
+            for (key, value) in pendingNegative { negative[key] = Date(timeIntervalSince1970: value) }
             lock.unlock()
         }
     }
