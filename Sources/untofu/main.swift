@@ -609,7 +609,7 @@ case "report-test":
     // this font name and deliberately does not store it, so checking that the
     // endpoint works cannot inflate the numbers it exists to report.
     let probe = MissReport.build(font: positional.count > 1 ? positional[1] : "__healthcheck__",
-                                 requesterPID: nil, foundLocally: false)
+                                 requesterBundle: nil, foundLocally: false)
     print("POST \(MissReport.endpoint.absoluteString)")
     print(probe.previewJSON)
     if let failure = probe.send() {
@@ -639,14 +639,15 @@ case "dialog-preview":
         // fires and the panel simply never appears.
         let reporter = UnresolvedReporter(preferences: preferences, local: nil)
         previewHolder = reporter
-        reporter.record(psName: "Aptos Display", requester: "Keynote", pid: nil)
+        reporter.record(psName: "Aptos Display", requester: "Keynote",
+                    bundleID: "com.apple.iWork.Keynote")
         if which == "miss-multi" {
             reporter.record(psName: "Segoe UI Semibold")
             reporter.record(psName: "HelveticaNeueLTPro-Bd")
         }
     case "report":
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            let sample = MissReport.build(font: "Aptos Display", requesterPID: nil,
+            let sample = MissReport.build(font: "Aptos Display", requesterBundle: nil,
                                           foundLocally: true)
             NSApp.activate(ignoringOtherApps: true)
             _ = MissPanel.confirmationAlert(for: sample).runModal()
@@ -682,7 +683,7 @@ case "dialog-snapshot":
     snapApp.finishLaunching()
     for (suffix, appearance) in [("light", NSAppearance.Name.aqua),
                                  ("dark", NSAppearance.Name.darkAqua)] {
-        MissPanel(names: snapNames, requester: "Keynote", requesterPID: nil,
+        MissPanel(names: snapNames, requester: "Keynote", requesterBundle: nil,
                   preferences: preferences)
             .snapshot(to: snapDir.appendingPathComponent("panel-\(suffix).png"),
                       appearance: appearance)
@@ -694,7 +695,7 @@ case "dialog-test":
     // for the panel to live on and nothing appears.
     let reporter = UnresolvedReporter(preferences: preferences)
     reporter.record(psName: positional.count > 1 ? positional[1] : "HelveticaNeueLTPro-Bd",
-                    requester: "Keynote", pid: nil)
+                    requester: "Keynote", bundleID: "com.apple.iWork.Keynote")
     if positional.count > 2 { reporter.record(psName: positional[2]) }
     let host = NSApplication.shared
     host.setActivationPolicy(.regular)

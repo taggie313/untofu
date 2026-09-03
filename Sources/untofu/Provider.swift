@@ -133,11 +133,20 @@ final class Provider {
             // Resolved here rather than in handle(): naming the app costs a
             // subprocess, which must stay off the blocking path.
             let app = Notifier.appName(for: pid)
+            // Resolved HERE, not when the report is built. The panel debounces
+            // for four seconds and then waits for a person to press a button —
+            // measured at 9 to 65 seconds after the request in the reports
+            // received so far — and a requester can be gone in two. Worse than
+            // losing the name: pids are recycled, so asking the system minutes
+            // later can confidently name a completely unrelated application.
+            let bundle = RequesterPolicy.bundleIdentifier(pid)
+            Log.debug("requester for \(psName): \(app ?? "unknown") "
+                    + "[\(bundle ?? "no bundle id")] (pid \(pid))")
             Fetcher.fetch(psName: psName, into: self.cache,
                           observer: Fetcher.Observer(
                               resolved: { [weak self] in self?.notifier?.record(family: $0, app: app) },
                               unresolved: { [weak self] in
-                                  self?.reporter?.record(psName: $0, requester: app, pid: pid)
+                                  self?.reporter?.record(psName: $0, requester: app, bundleID: bundle)
                               }))
             self.inFlightLock.lock()
             self.inFlight.remove(key)

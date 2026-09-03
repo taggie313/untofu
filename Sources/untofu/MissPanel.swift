@@ -54,7 +54,7 @@ final class MissPanel: NSObject, NSWindowDelegate {
 
     private let names: [String]
     private let requester: String?
-    private let requesterPID: pid_t?
+    private let requesterBundle: String?
     private let preferences: Preferences
     private let local: LocalFonts?
     /// Held so the panel is not deallocated the moment `present` returns.
@@ -68,11 +68,11 @@ final class MissPanel: NSObject, NSWindowDelegate {
 
     private var primary: String { names[0] }
 
-    init(names: [String], requester: String?, requesterPID: pid_t?,
+    init(names: [String], requester: String?, requesterBundle: String?,
          preferences: Preferences, local: LocalFonts? = nil) {
         self.names = names
         self.requester = requester
-        self.requesterPID = requesterPID
+        self.requesterBundle = requesterBundle
         self.preferences = preferences
         self.local = local
         super.init()
@@ -439,7 +439,7 @@ final class MissPanel: NSObject, NSWindowDelegate {
         // time. Whether the *family* was here all along is the question worth
         // sending.
         let relative = local?.relative(of: primary)
-        let report = MissReport.build(font: primary, requesterPID: requesterPID,
+        let report = MissReport.build(font: primary, requesterBundle: requesterBundle,
                                       foundLocally: relative != nil)
 
         // Shown before it is sent, in full. A button that quietly transmits

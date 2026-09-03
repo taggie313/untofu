@@ -32,7 +32,7 @@ final class UnresolvedReporter {
                                       qos: .userInitiated)
     private var pending: [String] = []
     private var requester: String?
-    private var requesterPID: pid_t?
+    private var requesterBundle: String?
     private var scheduled: DispatchWorkItem?
 
     init(preferences: Preferences, local: LocalFonts? = nil) {
@@ -40,7 +40,7 @@ final class UnresolvedReporter {
         self.local = local
     }
 
-    func record(psName: String, requester: String? = nil, pid: pid_t? = nil) {
+    func record(psName: String, requester: String? = nil, bundleID: String? = nil) {
         // Asked once, answered forever. Checked here rather than in the panel so
         // a suppressed name does not even hold the coalescing window open.
         guard !preferences.isSuppressed(psName) else {
@@ -50,7 +50,7 @@ final class UnresolvedReporter {
         queue.async {
             if !self.pending.contains(psName) { self.pending.append(psName) }
             if let requester { self.requester = requester }
-            if let pid { self.requesterPID = pid }
+            if let bundleID { self.requesterBundle = bundleID }
             self.scheduled?.cancel()
             let work = DispatchWorkItem { [weak self] in self?.flush() }
             self.scheduled = work
@@ -62,16 +62,18 @@ final class UnresolvedReporter {
         guard !pending.isEmpty else { return }
         let names = pending
         let who = requester
-        let pid = requesterPID
+        let bundle = requesterBundle
         pending = []
         requester = nil
-        requesterPID = nil
+        requesterBundle = nil
 
-        Log.info("unresolved panel: \(names.joined(separator: ", "))")
+        Log.info("unresolved panel: \(names.joined(separator: ", "))"
+               + "  (requested by \(who ?? "an unknown process")"
+               + (bundle.map { ", \($0)" } ?? ", bundle id unavailable") + ")")
         let preferences = self.preferences
         let local = self.local
         DispatchQueue.main.async {
-            MissPanel(names: names, requester: who, requesterPID: pid,
+            MissPanel(names: names, requester: who, requesterBundle: bundle,
                       preferences: preferences, local: local).present()
         }
     }

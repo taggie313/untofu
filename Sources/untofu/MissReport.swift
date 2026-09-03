@@ -37,11 +37,18 @@ struct MissReport: Codable {
 
     static let endpoint = URL(string: "https://untofu.elusive.net/api/report")!
 
-    static func build(font: String, requesterPID: pid_t?, foundLocally: Bool) -> MissReport {
+    /// `requesterBundle` is resolved when the request arrives, not here.
+    ///
+    /// This used to take a pid and ask the system for its bundle id at report
+    /// time. Every report received carried `app: null` because of it: the panel
+    /// debounces, then waits for a person, and the requester is routinely gone
+    /// within seconds. A pid held that long is also a pid that may have been
+    /// reused, so the answer could have been not just missing but wrong.
+    static func build(font: String, requesterBundle: String?, foundLocally: Bool) -> MissReport {
         let os = ProcessInfo.processInfo.operatingSystemVersion
         return MissReport(
             font: font,
-            app: requesterPID.flatMap { RequesterPolicy.bundleIdentifier($0) },
+            app: requesterBundle,
             untofuVersion: Build.version,
             macosVersion: "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)",
             foundLocally: foundLocally)
