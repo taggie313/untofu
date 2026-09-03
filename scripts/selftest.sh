@@ -40,6 +40,12 @@ restore_prefs() {
   # a release: the record held its 13 gated entries and `untofu status` computed
   # 581, while the agent went on serving 544 and gated fonts substituted.
   pkill -HUP -u "$(id -u)" -f 'untofu run' 2>/dev/null
+  # The install-failure test makes the fonts directory read-only to provoke a
+  # failed adopt(). Interrupted between the two chmods it would leave the user's
+  # cache unwritable and the agent unable to store anything it fetches, so the
+  # restore belongs here, where it runs however the suite ends.
+  [ -d "$CACHE/fonts" ] && chmod 755 "$CACHE/fonts" 2>/dev/null
+  pkill -f 'untofu-selftest-fake' 2>/dev/null
   return 0
 }
 trap restore_prefs EXIT
@@ -391,7 +397,7 @@ echo "== failure kinds =="
 # font" dialog — for a font that is on Google Fonts and merely could not be
 # looked up. UNTOFU_GITHUB_API points the client at a local server so all three
 # can be exercised without waiting out a real rate limit.
-FAKE_PY="$CACHE/.fake-github.py"
+FAKE_PY="$CACHE/untofu-selftest-fake.py"
 mkdir -p "$CACHE"
 cat > "$FAKE_PY" <<'FAKEEOF'
 import sys, http.server
@@ -434,6 +440,54 @@ check "$(kind_probe http://127.0.0.1:9998)" "2:clean" \
       "nor does an unreachable network"
 check "$(kind_probe http://127.0.0.1:8762)" "1:poisoned" \
       "but a real 404 still counts as a miss and is cached"
+
+# The listing can be perfectly fine and the DOWNLOAD still fail. download() used
+# to arm a pause only for 403/429 and status 0, and Fetcher recovered the reason
+# by asking whether a pause was armed — so a 5xx from raw.githubusercontent.com,
+# or a 200 with an empty body behind a captive portal, produced a bare nil,
+# no pause, and a confident "this font does not exist".
+cat > "$CACHE/untofu-selftest-fake2.py" <<'FAKE2EOF'
+import sys, json, http.server
+PORT = int(sys.argv[1]); DL = int(sys.argv[2])
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path.startswith('/file'):
+            self.send_response(DL); self.end_headers(); self.wfile.write(b''); return
+        body = json.dumps([{ "type":"file", "name":"Karla[wght].ttf",
+                             "download_url": f"http://127.0.0.1:{PORT}/file/Karla.ttf" }]).encode()
+        self.send_response(200); self.send_header('Content-Type','application/json')
+        self.send_header('Content-Length', str(len(body))); self.end_headers(); self.wfile.write(body)
+    def log_message(self, *a): pass
+http.server.HTTPServer(('127.0.0.1', PORT), H).serve_forever()
+FAKE2EOF
+python3 "$CACHE/untofu-selftest-fake2.py" 8763 500 >/dev/null 2>&1 & FAKEDL=$!
+sleep 1
+check "$(kind_probe http://127.0.0.1:8763)" "2:clean" \
+      "a good listing whose download 5xxs is not a miss either"
+kill $FAKEDL 2>/dev/null
+rm -f "$CACHE/untofu-selftest-fake2.py"
+
+# And the strongest evidence gets the harshest treatment if install failure is
+# mistaken for absence: by this point the file has downloaded, parsed, and
+# answered to the exact name asked for.
+printf '{}' > "$CACHE/negative.json"
+rm -f "$CACHE"/fonts/Karla*.ttf 2>/dev/null
+python3 -c "
+import json
+try:
+    d=json.load(open('$CACHE/index.json'))
+    json.dump({k:v for k,v in d.items() if 'karla' not in k}, open('$CACHE/index.json','w'))
+except Exception: pass"
+chmod 500 "$CACHE/fonts"
+$BIN fetch Karla-Regular >/dev/null 2>&1
+INSTALL_RC=$?
+chmod 755 "$CACHE/fonts"
+INSTALL_NEG=$(python3 -c "
+import json
+d=json.load(open('$CACHE/negative.json'))
+print('poisoned' if any('karla' in k for k in d) else 'clean')")
+check "$INSTALL_RC:$INSTALL_NEG" "2:clean" \
+      "a font that downloads and verifies but cannot be installed is not a miss"
 
 kill $FAKE403 $FAKE404 2>/dev/null
 rm -f "$FAKE_PY"

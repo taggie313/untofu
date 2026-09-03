@@ -150,29 +150,51 @@ enum GoogleFonts {
         }
     }
 
-    /// Downloads one file. Nil means it did not arrive — and if that was
-    /// GitHub refusing rather than the file being bad, the client backs off, so
-    /// the caller can tell the difference by asking `paused` afterwards.
-    static func download(_ file: RemoteFile, to directory: URL) -> URL? {
-        if paused != nil { return nil }
+    /// One downloaded file, or why it did not arrive.
+    enum Download {
+        case saved(URL)
+        /// Could not be fetched or stored. Nothing about the font follows.
+        case unreachable(String)
+    }
+
+    /// Downloads one file.
+    ///
+    /// Returns a reason rather than a bare nil, and the caller must treat every
+    /// reason as inconclusive. Asking the global `paused` flag afterwards was
+    /// not good enough: a 5xx from raw.githubusercontent.com, or a 200 with an
+    /// empty body behind a captive portal, arms no pause — so the caller saw
+    /// nil, found `paused` nil, and concluded the font does not exist.
+    static func download(_ file: RemoteFile, to directory: URL) -> Download {
+        if let reason = paused { return .unreachable(reason) }
+
         let response = get(file.url)
         if response.status == 403 || response.status == 429 {
             let wait = min(response.retryAfter ?? 900, 900)
             pause(max(wait, 60), because: "GitHub rate limit while downloading")
-            return nil
+            return .unreachable("rate limited")
         }
         if response.status == 0 {
             pause(60, because: "cannot reach GitHub")
-            return nil
+            return .unreachable("network unreachable")
         }
-        guard let data = response.data, !data.isEmpty else { return nil }
+        guard (200..<300).contains(response.status) else {
+            // 5xx during an incident, 451, a proxy's 407 — all transient, none
+            // of them evidence. Pause briefly so a whole document's worth of
+            // files does not each rediscover it.
+            pause(60, because: "GitHub answered \(response.status) for a download")
+            return .unreachable("GitHub answered \(response.status)")
+        }
+        guard let data = response.data, !data.isEmpty else {
+            return .unreachable("empty response body")
+        }
+
         let destination = directory.appendingPathComponent(file.name)
         do {
             try data.write(to: destination)
-            return destination
+            return .saved(destination)
         } catch {
-            Log.warn("could not write \(file.name): \(error.localizedDescription)")
-            return nil
+            // A full disk is not a fact about the catalogue.
+            return .unreachable("could not write \(file.name): \(error.localizedDescription)")
         }
     }
 

@@ -78,10 +78,12 @@ enum Fetcher {
                 Log.debug("\(license)/\(slug): \(files.count) font file(s)")
 
                 for file in files.prefix(maxDownloadsPerAttempt) {
-                    guard let local = GoogleFonts.download(file, to: scratch) else {
-                        // A download that failed because GitHub refused is not
-                        // evidence about the font.
-                        if let why = GoogleFonts.paused { blocked = why }
+                    let local: URL
+                    switch GoogleFonts.download(file, to: scratch) {
+                    case .saved(let url): local = url
+                    case .unreachable(let why):
+                        // Never evidence about the font: it did not arrive.
+                        blocked = why
                         continue
                     }
                     guard let parsed = FontFile.read(local) else {
@@ -96,7 +98,17 @@ enum Fetcher {
                         try? FileManager.default.removeItem(at: local)
                         continue
                     }
-                    guard let installed = adopt(local, into: cache) else { continue }
+                    // Reaching here means the file downloaded, parsed, and
+                    // answers to the exact name asked for — the strongest
+                    // evidence this tool can gather that the font exists. If
+                    // installing it then fails (a full disk, a permissions
+                    // problem), that is a fact about this machine and must not
+                    // become "no such font": doing so would take the one case
+                    // we are surest about and give it the harshest outcome.
+                    guard let installed = adopt(local, into: cache) else {
+                        blocked = "downloaded \(file.name) but could not install it"
+                        continue
+                    }
                     cache.record(installed)
                     Log.info("fetched \(psName) <- \(license)/\(slug)/\(file.name) "
                            + "(\(installed.postScriptNames.count) face(s) indexed)")

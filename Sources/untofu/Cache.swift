@@ -158,20 +158,27 @@ final class Cache {
 
     /// Re-reads both maps from disk. The daemon calls this on SIGHUP so a
     /// `untofu fetch` run in another process is picked up without a restart.
+    /// Re-reads both maps, keeping what it already has for anything it cannot
+    /// read.
+    ///
+    /// The "cannot read" case used to fall through to an empty dictionary and
+    /// then assign it, so one unreadable file emptied the live index and the
+    /// agent quietly stopped serving every font it had cached. A file that will
+    /// not decode is a reason to keep the last good view and say so, never a
+    /// reason to conclude the cache is empty — the same mistake as treating a
+    /// failed lookup as proof a font does not exist.
     func reload() {
-        var freshIndex: [String: String] = [:]
-        var freshNegative: [String: Date] = [:]
-        if let data = try? Data(contentsOf: indexURL),
-           let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
-            freshIndex = decoded
+        let freshIndex = Cache.decode([String: String].self, from: indexURL)
+        let freshNegative = Cache.decode([String: Double].self, from: negativeURL)
+
+        if freshIndex == nil, FileManager.default.fileExists(atPath: indexURL.path) {
+            Log.warn("\(indexURL.lastPathComponent) could not be read; keeping the "
+                   + "\(entries.count) face(s) already indexed")
         }
-        if let data = try? Data(contentsOf: negativeURL),
-           let decoded = try? JSONDecoder().decode([String: Double].self, from: data) {
-            freshNegative = decoded.mapValues { Date(timeIntervalSince1970: $0) }
-        }
+
         lock.lock()
-        index = freshIndex
-        negative = freshNegative
+        if let freshIndex { index = freshIndex }
+        if let freshNegative { negative = freshNegative.mapValues { Date(timeIntervalSince1970: $0) } }
         lock.unlock()
     }
 
@@ -206,8 +213,17 @@ final class Cache {
 
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            if let data = try? encoder.encode(mergedIndex) { try? data.write(to: indexURL) }
-            if let data = try? encoder.encode(mergedNegative) { try? data.write(to: negativeURL) }
+            // .atomic, because these are read by other processes — and, since
+            // 0.4.3, by this one's own file watcher every two seconds. A plain
+            // write truncates in place, so a reader landing mid-write gets half
+            // a JSON document, which reload() below used to turn into an empty
+            // index: the agent would stop serving every cached font it had.
+            if let data = try? encoder.encode(mergedIndex) {
+                try? data.write(to: indexURL, options: .atomic)
+            }
+            if let data = try? encoder.encode(mergedNegative) {
+                try? data.write(to: negativeURL, options: .atomic)
+            }
 
             // Adopt the merged view, so this process can serve what the others fetched.
             lock.lock()
