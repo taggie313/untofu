@@ -1,8 +1,8 @@
 class Untofu < Formula
   desc "Supplies missing fonts to any macOS app, on demand"
   homepage "https://untofu.elusive.net"
-  url "https://github.com/taggie313/untofu/releases/download/v0.4.6/untofu-0.4.6.tar.gz"
-  sha256 "8d372b9e2bb58e26033b65d3231b6af51c32e8760fcb548b4d0714a11857fdf8"
+  url "https://github.com/taggie313/untofu/releases/download/v0.4.7/untofu-0.4.7.tar.gz"
+  sha256 "0773ae5124cb540f875ee8a7581dbeb36aa9a75b600f2f79be2eceda32e4f5b8"
   license "MIT"
   head "https://github.com/taggie313/untofu.git", branch: "main"
 
@@ -25,17 +25,17 @@ class Untofu < Formula
   # that — so availability is checked at build time, not hoped for — and the
   # resulting binary reports `minos 12.0` on both slices.
   bottle do
-    root_url "https://github.com/taggie313/untofu/releases/download/v0.4.6"
-    sha256 cellar: :any_skip_relocation, arm64_monterey: "f42f3f3c6234855e1154fd8206b0507c7a2bbb7aff2c8d7be7006b9ac47ee804"
-    sha256 cellar: :any_skip_relocation, arm64_ventura:  "f42f3f3c6234855e1154fd8206b0507c7a2bbb7aff2c8d7be7006b9ac47ee804"
-    sha256 cellar: :any_skip_relocation, arm64_sonoma:   "f42f3f3c6234855e1154fd8206b0507c7a2bbb7aff2c8d7be7006b9ac47ee804"
-    sha256 cellar: :any_skip_relocation, arm64_sequoia:  "f42f3f3c6234855e1154fd8206b0507c7a2bbb7aff2c8d7be7006b9ac47ee804"
-    sha256 cellar: :any_skip_relocation, arm64_tahoe:    "f42f3f3c6234855e1154fd8206b0507c7a2bbb7aff2c8d7be7006b9ac47ee804"
-    sha256 cellar: :any_skip_relocation, monterey:       "f42f3f3c6234855e1154fd8206b0507c7a2bbb7aff2c8d7be7006b9ac47ee804"
-    sha256 cellar: :any_skip_relocation, ventura:        "f42f3f3c6234855e1154fd8206b0507c7a2bbb7aff2c8d7be7006b9ac47ee804"
-    sha256 cellar: :any_skip_relocation, sonoma:         "f42f3f3c6234855e1154fd8206b0507c7a2bbb7aff2c8d7be7006b9ac47ee804"
-    sha256 cellar: :any_skip_relocation, sequoia:        "f42f3f3c6234855e1154fd8206b0507c7a2bbb7aff2c8d7be7006b9ac47ee804"
-    sha256 cellar: :any_skip_relocation, tahoe:          "f42f3f3c6234855e1154fd8206b0507c7a2bbb7aff2c8d7be7006b9ac47ee804"
+    root_url "https://github.com/taggie313/untofu/releases/download/v0.4.7"
+    sha256 cellar: :any_skip_relocation, arm64_monterey: "e9efa693dc25d9a7eb86b2e5ade4928ce44b6355c79344d1e6f1a8e6460252e6"
+    sha256 cellar: :any_skip_relocation, arm64_ventura:  "e9efa693dc25d9a7eb86b2e5ade4928ce44b6355c79344d1e6f1a8e6460252e6"
+    sha256 cellar: :any_skip_relocation, arm64_sonoma:   "e9efa693dc25d9a7eb86b2e5ade4928ce44b6355c79344d1e6f1a8e6460252e6"
+    sha256 cellar: :any_skip_relocation, arm64_sequoia:  "e9efa693dc25d9a7eb86b2e5ade4928ce44b6355c79344d1e6f1a8e6460252e6"
+    sha256 cellar: :any_skip_relocation, arm64_tahoe:    "e9efa693dc25d9a7eb86b2e5ade4928ce44b6355c79344d1e6f1a8e6460252e6"
+    sha256 cellar: :any_skip_relocation, monterey:       "e9efa693dc25d9a7eb86b2e5ade4928ce44b6355c79344d1e6f1a8e6460252e6"
+    sha256 cellar: :any_skip_relocation, ventura:        "e9efa693dc25d9a7eb86b2e5ade4928ce44b6355c79344d1e6f1a8e6460252e6"
+    sha256 cellar: :any_skip_relocation, sonoma:         "e9efa693dc25d9a7eb86b2e5ade4928ce44b6355c79344d1e6f1a8e6460252e6"
+    sha256 cellar: :any_skip_relocation, sequoia:        "e9efa693dc25d9a7eb86b2e5ade4928ce44b6355c79344d1e6f1a8e6460252e6"
+    sha256 cellar: :any_skip_relocation, tahoe:          "e9efa693dc25d9a7eb86b2e5ade4928ce44b6355c79344d1e6f1a8e6460252e6"
   end
 
   # CoreText's font-request hook is macOS-only, and the C shim links CoreText
