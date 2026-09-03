@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Resolve a PostScript name to a font file, verify it, and cache it.
@@ -137,11 +138,23 @@ enum Fetcher {
     /// Moves a verified file out of scratch and into the cache proper.
     private static func adopt(_ file: URL, into cache: Cache) -> FontFile? {
         let destination = cache.fontsDir.appendingPathComponent(file.lastPathComponent)
-        try? FileManager.default.removeItem(at: destination)
-        do {
-            try FileManager.default.moveItem(at: file, to: destination)
-        } catch {
-            Log.warn("could not install \(file.lastPathComponent): \(error.localizedDescription)")
+
+        // rename(2), not removeItem-then-moveItem.
+        //
+        // Two fetches can legitimately land on the same file: `Raleway-Bold` and
+        // `RalewayRoman-Regular` are different names with different in-flight
+        // keys, both resolve to `ofl/raleway`, and both download
+        // `Raleway[wght].ttf`. The unlink-then-move pair gives that pair two
+        // ways to hurt each other — a window where the destination does not
+        // exist at all, which the index may already be pointing at, and then a
+        // move that fails outright because the other side recreated it.
+        //
+        // rename replaces atomically. The loser overwrites with identical bytes
+        // and both callers succeed. Both paths are inside fontsDir, so this is
+        // never a cross-device rename.
+        guard rename(file.path, destination.path) == 0 else {
+            Log.warn("could not install \(file.lastPathComponent): "
+                   + String(cString: strerror(errno)))
             return nil
         }
         return FontFile.read(destination)

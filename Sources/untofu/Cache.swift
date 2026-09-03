@@ -225,10 +225,26 @@ final class Cache {
                 try? data.write(to: negativeURL, options: .atomic)
             }
 
-            // Adopt the merged view, so this process can serve what the others fetched.
+            // Adopt what the other writers contributed WITHOUT discarding what
+            // this process added while the write was in flight.
+            //
+            // This was `index = mergedIndex`, which is a lost update. The
+            // snapshot above is taken inside the flock, but another thread can
+            // add an entry between that snapshot and this line, and the
+            // assignment threw it away — first from memory, and then from disk
+            // too, because that thread's own persist() would snapshot the map we
+            // had just emptied for it. The font ended up sitting in fontsDir
+            // indexed under nothing, while the user had already been told it was
+            // fetched and to reopen their document.
+            //
+            // Harmless while the resolve queue was serial. It becomes the normal
+            // case the moment more than one fetch runs at a time, which is why it
+            // is fixed before widening rather than after.
             lock.lock()
-            index = mergedIndex
-            negative = mergedNegative.mapValues { Date(timeIntervalSince1970: $0) }
+            index.merge(mergedIndex) { mine, _ in mine }
+            negative.merge(mergedNegative.mapValues { Date(timeIntervalSince1970: $0) }) { mine, _ in mine }
+            for key in removedIndex { index.removeValue(forKey: key) }
+            for key in removedNegative { negative.removeValue(forKey: key) }
             lock.unlock()
         }
     }
