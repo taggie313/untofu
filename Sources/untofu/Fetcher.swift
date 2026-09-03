@@ -16,14 +16,35 @@ enum Fetcher {
         /// Human-readable family name, e.g. "Playfair Display".
         var resolved: ((String) -> Void)?
         /// The raw PostScript name, which is what the user needs to search for.
+        ///
+        /// Fires only when the catalogue was actually consulted and does not
+        /// have the font. A lookup that could not be made — rate limited, no
+        /// network — is not an answer, and telling the user their font is
+        /// "commercial or private" on the strength of it is a lie.
         var unresolved: ((String) -> Void)?
+    }
+
+    /// Why a fetch ended.
+    enum Outcome {
+        case fetched
+        /// The catalogue was consulted and does not have it.
+        case absent
+        /// It could not be consulted. Carries why, for the log and the CLI.
+        case unreachable(String)
+
+        var succeeded: Bool { if case .fetched = self { return true }; return false }
     }
 
     @discardableResult
     static func fetch(psName: String, into cache: Cache,
                       observer: Observer? = nil) -> Bool {
+        resolve(psName: psName, into: cache, observer: observer).succeeded
+    }
+
+    static func resolve(psName: String, into cache: Cache,
+                        observer: Observer? = nil) -> Outcome {
         let candidates = Resolver.familyCandidates(for: psName)
-        guard !candidates.isEmpty else { return false }
+        guard !candidates.isEmpty else { return .absent }
 
         // Skip families we know we can never supply. Nothing is fetched and,
         // crucially, the user is not told — a dialog listing Calibri and Segoe UI
@@ -31,7 +52,7 @@ enum Fetcher {
         if Resolver.isKnownProprietary(psName) {
             Log.debug("skipping \(psName): proprietary family, never on Google Fonts")
             cache.markUnresolved(psName)
-            return false
+            return .absent
         }
         Log.debug("resolving \(psName) via candidates: \(candidates.joined(separator: ", "))")
 
@@ -43,13 +64,26 @@ enum Fetcher {
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: scratch) }
 
+        // Tracks whether any lookup failed to happen, as opposed to answering no.
+        var blocked: String?
+
         for slug in candidates {
             for license in GoogleFonts.licenseDirs {
-                guard let files = GoogleFonts.listing(license: license, slug: slug) else { continue }
+                let files: [GoogleFonts.RemoteFile]
+                switch GoogleFonts.listing(license: license, slug: slug) {
+                case .found(let f): files = f
+                case .absent: continue
+                case .unreachable(let why): blocked = why; continue
+                }
                 Log.debug("\(license)/\(slug): \(files.count) font file(s)")
 
                 for file in files.prefix(maxDownloadsPerAttempt) {
-                    guard let local = GoogleFonts.download(file, to: scratch) else { continue }
+                    guard let local = GoogleFonts.download(file, to: scratch) else {
+                        // A download that failed because GitHub refused is not
+                        // evidence about the font.
+                        if let why = GoogleFonts.paused { blocked = why }
+                        continue
+                    }
                     guard let parsed = FontFile.read(local) else {
                         try? FileManager.default.removeItem(at: local)
                         continue
@@ -67,15 +101,25 @@ enum Fetcher {
                     Log.info("fetched \(psName) <- \(license)/\(slug)/\(file.name) "
                            + "(\(installed.postScriptNames.count) face(s) indexed)")
                     observer?.resolved?(Resolver.displayFamily(for: psName))
-                    return true
+                    return .fetched
                 }
             }
+        }
+
+        // The distinction the whole type exists for. Marking a name unresolved
+        // suppresses it for six hours and tells the user it is commercial or
+        // private; doing that because we could not reach GitHub is simply
+        // false, and it used to happen on every rate limit and every dropped
+        // connection.
+        if let why = blocked {
+            Log.info("could not resolve \(psName): \(why) — not caching that as a miss")
+            return .unreachable(why)
         }
 
         Log.info("unresolved \(psName) — no Google Fonts family answers to it")
         cache.markUnresolved(psName)
         observer?.unresolved?(psName)
-        return false
+        return .absent
     }
 
     /// Moves a verified file out of scratch and into the cache proper.

@@ -345,12 +345,23 @@ case "fetch":
         exit(1)
     }
     let name = positional[1]
-    if Fetcher.fetch(psName: name, into: cache) {
+    switch Fetcher.resolve(psName: name, into: cache) {
+    case .fetched:
         LaunchAgent.reloadRunningAgent()
         print("cached \(name)")
-    } else {
-        print("could not resolve \(name)")
+    case .absent:
+        print("could not resolve \(name) — nothing on Google Fonts answers to that name")
         exit(1)
+    case .unreachable(let why):
+        // Distinct exit code, because these are different questions: 1 means
+        // the catalogue does not have it, 2 means nobody asked the catalogue.
+        // A script that retries should retry on 2 and not on 1.
+        print("could not look up \(name): \(why)")
+        if GoogleFonts.paused != nil {
+            print("Lookups are paused for a few minutes. `untofu fetch` again after that,")
+            print("or set GITHUB_TOKEN to raise the 60-requests-per-hour limit.")
+        }
+        exit(2)
     }
 
 case "list":

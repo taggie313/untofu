@@ -384,6 +384,61 @@ check "$($BIN status | grep -c '^folders: *including')" "1" \
 rm -f "$PREFS"
 
 echo
+echo "== failure kinds =="
+# A rate limit, a dropped connection and a genuine 404 used to be the same
+# thing: GoogleFonts.listing returned nil for all three, so Fetcher fell through
+# to markUnresolved — a six-hour suppression plus the "commercial or private
+# font" dialog — for a font that is on Google Fonts and merely could not be
+# looked up. UNTOFU_GITHUB_API points the client at a local server so all three
+# can be exercised without waiting out a real rate limit.
+FAKE_PY="$CACHE/.fake-github.py"
+mkdir -p "$CACHE"
+cat > "$FAKE_PY" <<'FAKEEOF'
+import sys, http.server
+CODE = int(sys.argv[1]); PORT = int(sys.argv[2])
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(CODE); self.send_header('Content-Type','application/json')
+        self.end_headers(); self.wfile.write(b'{"message":"simulated"}')
+    def log_message(self, *a): pass
+http.server.HTTPServer(('127.0.0.1', PORT), H).serve_forever()
+FAKEEOF
+python3 "$FAKE_PY" 403 8761 >/dev/null 2>&1 & FAKE403=$!
+python3 "$FAKE_PY" 404 8762 >/dev/null 2>&1 & FAKE404=$!
+sleep 1
+
+kind_probe() {   # $1 = api base -> "<exit>:<poisoned?>"
+  printf '{}' > "$CACHE/negative.json"
+  UNTOFU_GITHUB_API="$1" $BIN fetch Karla-Regular >/dev/null 2>&1
+  local rc=$?
+  local poisoned
+  poisoned=$(python3 -c "
+import json
+try:
+    d=json.load(open('$CACHE/negative.json'))
+    print('poisoned' if any('karla' in k for k in d) else 'clean')
+except Exception: print('clean')")
+  echo "$rc:$poisoned"
+}
+rm -f "$CACHE/fonts/Karla"* 2>/dev/null
+python3 -c "
+import json
+try:
+    d=json.load(open('$CACHE/index.json'))
+    json.dump({k:v for k,v in d.items() if 'karla' not in k}, open('$CACHE/index.json','w'))
+except Exception: pass"
+
+check "$(kind_probe http://127.0.0.1:8761)" "2:clean" \
+      "a rate limit does not become 'this font does not exist'"
+check "$(kind_probe http://127.0.0.1:9998)" "2:clean" \
+      "nor does an unreachable network"
+check "$(kind_probe http://127.0.0.1:8762)" "1:poisoned" \
+      "but a real 404 still counts as a miss and is cached"
+
+kill $FAKE403 $FAKE404 2>/dev/null
+rm -f "$FAKE_PY"
+
+echo
 echo "== concurrency =="
 rm -rf "$CACHE"
 # Each fetch stages downloads in its own scratch directory. A shared one is a
