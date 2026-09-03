@@ -54,6 +54,17 @@ ok()   { echo "  PASS  $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL  $1"; FAIL=$((FAIL+1)); }
 check(){ if [ "$1" = "$2" ]; then ok "$3"; else bad "$3 (expected '$2', got '$1')"; fi; }
 
+# A tiny CoreText client, so the suite can drive real font requests through a
+# running agent rather than only calling the CLI (which bypasses Provider).
+SCRATCH_PROBE="$(mktemp -d)/ctprobe"
+cat > "${SCRATCH_PROBE}.swift" <<'PROBE'
+import CoreText
+import Foundation
+let wanted = CommandLine.arguments.dropFirst().first ?? ""
+_ = CTFontCopyPostScriptName(CTFontCreateWithName(wanted as CFString, 24, nil))
+PROBE
+swiftc -O "${SCRATCH_PROBE}.swift" -o "$SCRATCH_PROBE" 2>/dev/null
+
 echo "building..."
 swift build >/dev/null 2>&1 || { echo "build failed"; exit 1; }
 
@@ -501,6 +512,57 @@ for f in Karla-Regular Rubik-Regular Lora-Regular; do $BIN fetch "$f" >/dev/null
 wait
 check "$($BIN list | grep -cE '^  (karla|rubik|lora)-regular  ->')" "3" "three concurrent fetches all land"
 check "$(ls -a "$CACHE/fonts" | grep -c incoming)" "0" "no scratch directories left behind"
+
+# Those are three separate PROCESSES, so they are concurrent whatever the agent's
+# own resolve queue does. Nothing above this line exercises Provider.queue at all
+# — you could set maxConcurrentOperationCount to 1, or leave it the serial
+# DispatchQueue it used to be, and every other test in this file still passes.
+#
+# So: drive real misses through a running agent, and use SIX DISTINCT families,
+# which is the part that makes the assertion capable of failing. The obvious
+# version — Raleway-Bold plus RalewayRoman-Regular — cannot fail, because both
+# names come out of the same parse of the same Raleway[wght].ttf and either fetch
+# alone satisfies both halves.
+#
+# What this catches: with the old Cache.persist (`index = mergedIndex`), a worker
+# finishing while another sat inside persist had its entry dropped from memory
+# and then from disk. Measured before the fix: 1 lost in 2 of 3 runs, always with
+# every file present in fontsDir — the font on disk, indexed under nothing, after
+# the user was told to reopen their document. After: 5 of 5 clean.
+rm -rf "$CACHE"; mkdir -p "$CACHE/fonts"
+CONC_FONTS="Karla-Regular Rubik-Regular Lora-Regular Cardo-Regular Arvo Inconsolata-Regular"
+$BIN run --quiet > "$CACHE/.conc.log" 2>&1 &
+CONC_AGENT=$!
+sleep 3
+CONC_PROBES=""
+for f in $CONC_FONTS; do
+  "$SCRATCH_PROBE" "$f" >/dev/null 2>&1 &
+  CONC_PROBES="$CONC_PROBES $!"
+done
+# Only the probes: a bare `wait` also waits on the agent, which never exits.
+for pp in $CONC_PROBES; do wait "$pp" 2>/dev/null; done
+
+conc_present() {
+  local c=0 f key
+  for f in $CONC_FONTS; do
+    key=$(echo "$f" | tr 'A-Z' 'a-z')
+    $BIN list 2>/dev/null | grep -q "^  $key  ->" && c=$((c+1))
+  done
+  echo "$c"
+}
+# Poll on the six names asked for. Counting total index entries is useless — one
+# variable font indexes dozens of siblings, so the count clears six immediately.
+for _ in $(seq 1 90); do [ "$(conc_present)" -ge 6 ] && break; sleep 1; done
+
+check "$(conc_present)" "6" "a burst of six distinct misses all reach the index"
+CONC_ORPHAN=0
+for f in $CONC_FONTS; do
+  key=$(echo "$f" | tr 'A-Z' 'a-z')
+  file=$($BIN list 2>/dev/null | awk -v k="^  $key  ->" '$0 ~ k {print $3}')
+  [ -n "$file" ] && [ ! -f "$CACHE/fonts/$file" ] && CONC_ORPHAN=$((CONC_ORPHAN+1))
+done
+check "$CONC_ORPHAN" "0" "and every one of them points at a file that exists"
+kill $CONC_AGENT 2>/dev/null; wait $CONC_AGENT 2>/dev/null
 
 echo
 echo "== browser policy =="

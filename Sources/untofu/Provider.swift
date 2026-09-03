@@ -10,7 +10,36 @@ final class Provider {
     private let local: LocalFonts?
     private let notifier: Notifier?
     private let reporter: UnresolvedReporter?
-    private let queue = DispatchQueue(label: "net.elusive.untofu.resolve", qos: .utility)
+    /// How many fetches may be in flight at once.
+    ///
+    /// Four. A fetch is almost entirely blocking round trips — up to two
+    /// candidates across three license directories to list, then up to eight
+    /// files to download, each a semaphore wait on a URLSession task — so it is
+    /// latency, not CPU, and throughput scales with width until the network
+    /// saturates. Serially, a document with eight missing fonts also defeats the
+    /// Notifier's three-second debounce by construction: the successes arrive
+    /// too far apart to coalesce, so the user gets a trickle of dialogs instead
+    /// of one saying "Fetched 8 missing fonts".
+    ///
+    /// Four also bounds the waste when GitHub says stop. At the instant one
+    /// worker sees a 403, at most three others already have a request in flight;
+    /// every worker after that finds the pause armed and returns without asking.
+    /// The over-spend is the width, not the number of missing fonts.
+    static let maxConcurrentFetches = 4
+
+    /// An OperationQueue rather than a concurrent DispatchQueue, and the
+    /// distinction matters here. These bodies block on semaphores, and GCD
+    /// answers a blocked worker by starting another thread — so a deck with
+    /// twenty distinct missing fonts would park twenty threads waiting on the
+    /// network. OperationQueue runs at most `maxConcurrentOperationCount` at a
+    /// time and leaves the rest as objects, not threads.
+    private let queue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "net.elusive.untofu.resolve"
+        q.qualityOfService = .utility
+        q.maxConcurrentOperationCount = Provider.maxConcurrentFetches
+        return q
+    }()
     private let inFlightLock = NSLock()
     private var inFlight = Set<String>()
 
@@ -96,7 +125,7 @@ final class Provider {
         inFlightLock.unlock()
         guard isNew else { return }
 
-        queue.async { [weak self] in
+        queue.addOperation { [weak self] in
             guard let self else { return }
             // Resolved here rather than in handle(): naming the app costs a
             // subprocess, which must stay off the blocking path.
