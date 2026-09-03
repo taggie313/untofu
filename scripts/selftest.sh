@@ -362,6 +362,26 @@ else
 fi
 
 echo
+echo "== catalogue warming =="
+# The word rule that suppresses Microsoft's symbol fonts stands down without a
+# family catalogue to veto against, and for three releases nothing fetched one:
+# knownFamilySlugs() was called only by `untofu scan`. A user who never scanned a
+# document never had a catalogue, so the suppression shipped in 0.4.5 did nothing
+# for them — every Office document went on producing the dialog. It worked here
+# only because testing had scanned something and left the file behind.
+rm -f "$CACHE/families.json"
+check "$($BIN explain 'HoloLens MDL2 Assets' | grep -c '^proprietary: no')" "1" \
+      "with no catalogue the word rule stands down (this is the failure mode)"
+$BIN run --quiet > "$CACHE/.warm.log" 2>&1 &
+WARMPID=$!
+for _ in $(seq 1 40); do [ -s "$CACHE/families.json" ] && break; sleep 1; done
+kill $WARMPID 2>/dev/null; wait $WARMPID 2>/dev/null
+check "$([ -s "$CACHE/families.json" ] && echo 1 || echo 0)" "1" \
+      "the agent fetches a catalogue at startup without being asked to scan"
+check "$($BIN explain 'HoloLens MDL2 Assets' | grep -c '^proprietary: yes')" "1" \
+      "and the symbol-font suppression then engages"
+
+echo
 echo "== state watch =="
 # The agent used to learn about a changed record only by being signalled, and
 # twice that failed silently: the pid file was cleared along with the cache, and
@@ -369,6 +389,10 @@ echo "== state watch =="
 # reported the truth while the running agent served a stale index.
 restore_prefs
 if [ "$($BIN folders | grep -c '^Also searched')" = "1" ]; then
+  # Make sure the record is in THIS build's format first. A snapshot left by an
+  # older or newer untofu is legitimately unusable, so the agent rebuilds instead
+  # of adopting it, and the test would be measuring that instead of the watch.
+  $BIN local --rebuild >/dev/null 2>&1
   cp "$CACHE/local-index.json" "$CACHE/.watch-good.json"
   $BIN run --quiet -v > "$CACHE/.watch.log" 2>&1 &
   WATCHPID=$!

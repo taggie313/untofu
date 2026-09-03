@@ -422,7 +422,18 @@ final class LocalFonts {
         guard LocalFonts.snapshotFingerprint() != known else { return false }
 
         let stored = LocalFonts.loadSnapshot()
-        guard !stored.isEmpty else { return false }
+        guard !stored.isEmpty else {
+            // The file changed but nothing usable came back — it was written by a
+            // build whose format this one does not share, in either direction.
+            // Returning false here left the agent serving whatever it had in
+            // memory, indefinitely and silently, which is the exact failure the
+            // watch exists to prevent. Rebuild from the directories instead;
+            // refresh() saves and re-fingerprints, so this settles rather than
+            // looping.
+            Log.info("the record is not in this build's format — rebuilding from disk")
+            refresh(gated: gated)
+            return true
+        }
         let usable = gated == .exclude ? stored.filter { !$0.value.gated } : stored
         let trusted = usable.values.filter(\.gated).count
 

@@ -192,6 +192,32 @@ case "run":
         }
     }
 
+    // Warm the family catalogue.
+    //
+    // It is the veto that stops a leading run of whole words being mistaken for a
+    // proprietary family, and without it that rule stands down entirely — by
+    // design, because suppressing on a guess is worse than a spurious dialog. The
+    // catch was that nothing ever fetched it: `knownFamilySlugs()` was called
+    // only by `untofu scan`, so a user who never scans a document never has a
+    // catalogue, the rule never engages, and every Office document goes on
+    // producing "couldn't find this font" dialogs for HoloLens MDL2 Assets and
+    // the rest. That is exactly the complaint that started this work, and the
+    // suppression shipped in 0.4.5 only ever worked here because testing had
+    // scanned a document and left a catalogue behind.
+    //
+    // A handful of requests, once a week, on a background queue, from a tool
+    // whose entire purpose is fetching fonts from that same host: it discloses
+    // nothing that an actual fetch would not.
+    DispatchQueue.global(qos: .utility).async {
+        let hadOne = GoogleFonts.cachedFamilySlugs() != nil
+        let catalogue = GoogleFonts.knownFamilySlugs()
+        if catalogue.isEmpty {
+            Log.debug("could not warm the family catalogue; the word rule stays stood down")
+        } else if !hadOne {
+            Log.info("family catalogue warmed — \(catalogue.count) families")
+        }
+    }
+
     // Nothing here contacts a server unless the user has said it may. The offer
     // is made once and needs an interface to make it through.
     if wantsUI && AppHost.hasWindowServer {
