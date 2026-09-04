@@ -33,9 +33,14 @@ if brew services list 2>/dev/null | grep -qE '^untofu +started'; then
 fi
 
 STATE_BACKUP=$(mktemp -d)
-for f in preferences.json local-index.json; do
+for f in preferences.json local-index.json index.json negative.json; do
   [ -f "$CACHE/$f" ] && cp "$CACHE/$f" "$STATE_BACKUP/$f"
 done
+# The fetched fonts themselves, not just the index naming them. Several sections
+# `rm -rf "$CACHE"` for a clean slate, which is right for the test and wrong for
+# whoever owns the machine: a few runs quietly emptied the real cache to zero
+# faces, and restoring only the index would leave it pointing at absent files.
+[ -d "$CACHE/fonts" ] && cp -a "$CACHE/fonts" "$STATE_BACKUP/fonts" 2>/dev/null
 # local-index.json matters as much as preferences.json: it is the record of the
 # permission-gated stashes, which only a deliberate `untofu folders --rescan`
 # can rebuild. Losing it leaves the agent quietly serving 544 faces instead of
@@ -43,6 +48,20 @@ done
 # what happened after each release run before this.
 restore_all() {
   [ "$BREW_SVC_WAS_RUNNING" = "1" ] && brew services start untofu >/dev/null 2>&1
+  return 0
+}
+
+# The user's own fetched fonts: the index and the files it names, restored
+# together so neither is put back without the other.
+restore_cache() {
+  mkdir -p "$CACHE"
+  for f in index.json negative.json; do
+    [ -f "$STATE_BACKUP/$f" ] && cp "$STATE_BACKUP/$f" "$CACHE/$f"
+  done
+  if [ -d "$STATE_BACKUP/fonts" ]; then
+    mkdir -p "$CACHE/fonts"
+    cp -a "$STATE_BACKUP/fonts/." "$CACHE/fonts/" 2>/dev/null
+  fi
   return 0
 }
 
@@ -65,7 +84,7 @@ restore_prefs() {
   pkill -f 'untofu-selftest-fake' 2>/dev/null
   return 0
 }
-trap 'restore_prefs; restore_all' EXIT
+trap 'restore_prefs; restore_cache; restore_all' EXIT
 
 ok()   { echo "  PASS  $1"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL  $1"; FAIL=$((FAIL+1)); }

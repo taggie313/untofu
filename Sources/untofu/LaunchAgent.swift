@@ -21,11 +21,25 @@ enum LaunchAgent {
             .appendingPathComponent("Library/Logs/untofu.log")
     }
 
-    /// Homebrew names formula services `homebrew.mxcl.<formula>`.
-    static let brewLabel = "homebrew.mxcl.untofu"
+    /// What Homebrew calls its service for this formula.
+    ///
+    /// Two labels, because Homebrew renamed the scheme: it was
+    /// `homebrew.mxcl.<formula>` and is now `sh.brew.<formula>`. Checking only
+    /// the old one silently broke two things on this machine — `untofu status`
+    /// reported "brew svc: not loaded" while the service was plainly running,
+    /// and, worse, `install` stopped refusing to add a second agent beside a
+    /// Homebrew-managed one. That guard exists because two agents race over one
+    /// cache and clobber each other's staging; a hardcoded label that ages out
+    /// turns a deliberate safety check into a no-op without a word.
+    static let brewLabels = ["sh.brew.untofu", "homebrew.mxcl.untofu"]
+
+    /// The label actually in use, for messages that name it.
+    static var brewLabel: String {
+        brewLabels.first(where: loaded) ?? brewLabels[0]
+    }
 
     static var isLoaded: Bool { loaded(label) }
-    static var brewServiceLoaded: Bool { loaded(brewLabel) }
+    static var brewServiceLoaded: Bool { brewLabels.contains(where: loaded) }
 
     private static func loaded(_ label: String) -> Bool {
         run("/bin/launchctl", ["print", "gui/\(getuid())/\(label)"]).status == 0
