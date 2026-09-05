@@ -208,6 +208,21 @@ final class LocalFonts {
     }
 
     private let lock = NSLock()
+
+    /// Serializes the walk in `refresh`.
+    ///
+    /// Deliberately NOT `lock`. That one is taken on the CoreText callback path
+    /// by `path(for:)`, so a walk holding it would block every application's
+    /// text layout for as long as the walk takes — 34 seconds on a cold run —
+    /// and would deadlock against its own publish at the end.
+    ///
+    /// Without this, two walks overlap: the startup walk begins, a SIGHUP or a
+    /// `folders --rescan` starts a second one, and each loads the record at the
+    /// beginning and writes its own map at the end. The later write wins whole,
+    /// so whatever the earlier one learned is lost and has to be re-read next
+    /// time. The window is the length of a walk, which on a first run is the
+    /// better part of a minute.
+    private let walkLock = NSLock()
     /// Size and modification date of the record as this process last read or
     /// wrote it. A watch event whose fingerprint matches this is our own write
     /// coming back at us, and acting on it would be a loop.
@@ -296,6 +311,7 @@ final class LocalFonts {
     /// once per login.
     @discardableResult
     func refresh(rebuild: Bool = false, gated: GatedPolicy = .exclude) -> Int {
+        walkLock.lock(); defer { walkLock.unlock() }
         let started = Date()
         let previous = rebuild ? [:] : LocalFonts.loadSnapshot()
 

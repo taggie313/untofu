@@ -15,6 +15,19 @@ final class Cache {
     /// on every reopen.
     static let negativeTTL: TimeInterval = 6 * 3600
 
+    /// Ceiling on how many unresolved names are kept on disk.
+    ///
+    /// Nothing pruned this map. `shouldAttempt` reads an expired entry, ignores
+    /// it, and leaves it there, so a name written once stayed forever — and a
+    /// name whose family is on the proprietary list is marked without any
+    /// network at all, so an application asking for distinct names in a loop
+    /// mints keys as fast as the queue runs. Every mark rewrites the whole file,
+    /// which makes each write dearer than the last.
+    ///
+    /// A busy Mac accumulates a few dozen genuinely unfetchable names. This is
+    /// fifty times that, so it can only ever bite the pathological case.
+    static let negativeCap = 2000
+
     private let lock = NSLock()
     private var index: [String: String] = [:]      // lowercased PostScript name -> filename
     private var negative: [String: Date] = [:]     // lowercased PostScript name -> last failure
@@ -252,6 +265,7 @@ final class Cache {
             // guarded by a test that only checked it said the word "dropped".
             for key in removedIndex { mergedIndex.removeValue(forKey: key) }
             for key in removedNegative { mergedNegative.removeValue(forKey: key) }
+            mergedNegative = Cache.bounded(mergedNegative)
 
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -292,6 +306,25 @@ final class Cache {
             for (key, value) in pendingNegative { negative[key] = Date(timeIntervalSince1970: value) }
             lock.unlock()
         }
+    }
+
+    /// The negative entries worth keeping: still inside the TTL, and capped.
+    ///
+    /// Dropping an expired entry changes no decision — `shouldAttempt` already
+    /// treats one as absent — it only stops the file growing without end. Over
+    /// the cap the oldest go first, because the newest are the ones a retry
+    /// would most likely waste a request on.
+    ///
+    /// Done here, inside persist(), because that is off the blocking path and
+    /// the map is being rewritten whole anyway.
+    static func bounded(_ negative: [String: Double]) -> [String: Double] {
+        let cutoff = Date().timeIntervalSince1970 - negativeTTL
+        var live = negative.filter { $0.value > cutoff }
+        guard live.count > negativeCap else { return live }
+        let doomed = live.sorted { $0.value < $1.value }.prefix(live.count - negativeCap)
+        for entry in doomed { live.removeValue(forKey: entry.key) }
+        Log.debug("negative cache trimmed to \(live.count) name(s)")
+        return live
     }
 
     private static func decode<T: Decodable>(_ type: T.Type, from url: URL) -> T? {

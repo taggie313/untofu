@@ -95,7 +95,51 @@ enum GoogleFonts {
     }
 
     /// What `<license>/<slug>/` holds — or why we cannot say.
+    /// Directory listings already fetched, briefly.
+    ///
+    /// This is where the budget actually goes. Chaining sibling fetches does not
+    /// help a static-only family — Lato-Regular, Lato-Bold, Lato-Light and
+    /// Lato-Black are four genuinely different files and all four must be
+    /// downloaded — but all four asked GitHub to list `ofl/lato` first. Measured
+    /// on one document: four faces, eight listing requests, of an
+    /// unauthenticated allowance of sixty an hour.
+    ///
+    /// Sixty seconds is long enough to cover the burst one document produces and
+    /// far too short to hold a stale view of the catalogue.
+    ///
+    /// `.unreachable` is deliberately never cached: it is a statement about the
+    /// network or the rate limit at one instant, and remembering it would turn a
+    /// blip into a minute of certainty.
+    private static let listingTTL: TimeInterval = 60
+    private static var listingCache: [String: (result: Availability, at: Date)] = [:]
+    private static let listingLock = NSLock()
+
     static func listing(license: String, slug: String, wanting: String? = nil) -> Availability {
+        let cacheKey = "\(license)/\(slug)"
+        listingLock.lock()
+        if let hit = listingCache[cacheKey], Date().timeIntervalSince(hit.at) < listingTTL {
+            listingLock.unlock()
+            Log.debug("listing \(cacheKey): answered from the last minute's result")
+            // Re-order for THIS request: the cached files are the same, but which
+            // of them should be tried first depends on the name being resolved.
+            if case .found(let files) = hit.result {
+                return .found(order(files, wanting: wanting))
+            }
+            return hit.result
+        }
+        listingLock.unlock()
+
+        let answer = uncachedListing(license: license, slug: slug, wanting: wanting)
+        if case .unreachable = answer {} else {
+            listingLock.lock()
+            listingCache[cacheKey] = (answer, Date())
+            listingLock.unlock()
+        }
+        return answer
+    }
+
+    private static func uncachedListing(license: String, slug: String,
+                                        wanting: String? = nil) -> Availability {
         if let reason = paused { return .unreachable(reason) }
 
         let api = URL(string: "\(apiBase)/repos/google/fonts/contents/\(license)/\(slug)")!

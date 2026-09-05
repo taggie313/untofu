@@ -48,6 +48,21 @@ final class Provider {
     private let inFlightLock = NSLock()
     private var inFlight = Set<String>()
 
+    /// The most recent queued operation per font family.
+    ///
+    /// `inFlight` collapses the same NAME arriving forty times, which a document
+    /// does constantly. It does nothing for two *different* names of one family,
+    /// and those are just as common: a deck using Lato regular and bold asks for
+    /// Lato-Regular and Lato-Bold, which are different keys resolving to the
+    /// same `ofl/lato` — so each ran the whole listing-and-download sequence,
+    /// spending the 60-requests-an-hour budget several times over on one family.
+    ///
+    /// The second arrival is not dropped: dropping it would cost the user a
+    /// second reopen of their document. It is made to run *after* the first,
+    /// which usually finds the answer already in the cache and returns without
+    /// asking GitHub anything.
+    private var familyOperations: [String: Operation] = [:]
+
     /// When false, a browser's cache misses are declined rather than fetched.
     private let fetchForBrowsers: Bool
 
@@ -136,8 +151,24 @@ final class Provider {
         inFlightLock.unlock()
         guard isNew else { return }
 
-        queue.addOperation { [weak self] in
+        // The most specific slug only — `familyCandidates` first element, which
+        // is what `lookupSlugs` itself starts from. Being specific means this can
+        // miss a pairing, which only costs the duplicate work it was already
+        // doing; it can never merge two genuinely different families.
+        let family = Resolver.familyCandidates(for: psName).first ?? key
+
+        let work = BlockOperation { [weak self] in
             guard let self else { return }
+
+            // Whatever ran ahead of us may already have supplied this exact
+            // name: one download indexes every face it answers to, so a sibling
+            // fetch usually makes this one unnecessary. Re-checked here rather
+            // than in handle(), which decided to enqueue before the queue ran.
+            if self.cache.path(for: psName) != nil {
+                Log.debug("\(psName) arrived while queued — a sibling fetch supplied it")
+                self.finish(key: key, family: family)
+                return
+            }
             // Resolved here rather than in handle(): naming the app costs a
             // subprocess, which must stay off the blocking path.
             let app = Notifier.appName(for: pid)
@@ -160,10 +191,28 @@ final class Provider {
                                   self?.stats?.record(unresolved: 1)
                                   self?.reporter?.record(psName: $0, requester: app, bundleID: bundle)
                               }))
-            self.inFlightLock.lock()
-            self.inFlight.remove(key)
-            self.inFlightLock.unlock()
+            self.finish(key: key, family: family)
         }
+
+        // Same family: run behind whatever is already queued for it rather than
+        // beside it. Different families still run four wide.
+        inFlightLock.lock()
+        if let previous = familyOperations[family], !previous.isFinished {
+            work.addDependency(previous)
+        }
+        familyOperations[family] = work
+        inFlightLock.unlock()
+
+        queue.addOperation(work)
+    }
+
+    /// Releases the in-flight name and forgets the family's operation if it was
+    /// the last one queued for it.
+    private func finish(key: String, family: String) {
+        inFlightLock.lock()
+        inFlight.remove(key)
+        if familyOperations[family]?.isFinished ?? true { familyOperations[family] = nil }
+        inFlightLock.unlock()
     }
 }
 

@@ -220,6 +220,68 @@ check "$(proprietary 'MS Outlook')" "0" "with no catalogue, the word rule stands
 check "$(proprietary 'MS Reference Specialty')" "1" "but a literal slug is suppressed regardless"
 
 echo
+echo "== request budget =="
+# Sibling faces of one family each re-listed the same directory. Lato ships 18
+# static files, so four faces genuinely need four downloads — but they were also
+# making four listing requests for `ofl/lato`, out of an unauthenticated
+# allowance of sixty an hour. Counted against a local server so this is exact
+# and needs no network.
+COUNTER="$CACHE/.counting_github.py"
+cat > "$COUNTER" <<'PYEOF'
+import sys, json, http.server, threading, signal
+PORT = int(sys.argv[1]); COUNT = {'n': 0}
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if '/contents/' in self.path:
+            COUNT['n'] += 1; body = json.dumps([]).encode(); self.send_response(200)
+        else:
+            body = b'{}'; self.send_response(404)
+        self.send_header('Content-Type','application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers(); self.wfile.write(body)
+    def log_message(self,*a): pass
+srv = http.server.HTTPServer(('127.0.0.1', PORT), H)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+def dump(*a):
+    print(COUNT['n'], flush=True); srv.shutdown(); sys.exit(0)
+signal.signal(signal.SIGTERM, dump)
+signal.pause()
+PYEOF
+# A catalogue on disk, so `scan` does not go to the network for it and only the
+# directory listings reach the counter.
+python3 -c "
+import json,os,time
+# Dates encode as seconds since 2001, and knownFamilySlugs() treats anything
+# older than a week as stale. A zero here read as the year 2001, so the
+# catalogue was refetched from the stub, came back empty, and scan gave up
+# before making a single listing request — which the first version of this
+# test then scored as a pass.
+json.dump({'fetched': time.time() - 978307200, 'slugs': ['zilla']},
+          open(os.path.expanduser('$CACHE/families.json'),'w'))"
+BUDGETDOC="$CACHE/.budget.pptx"
+python3 -c "
+import zipfile
+names = ' '.join(f'<a:latin typeface=\"Zilla-{w}\"/>' for w in ('Regular','Bold','Black'))
+with zipfile.ZipFile('$BUDGETDOC','w') as z:
+    z.writestr('[Content_Types].xml','<?xml version=\"1.0\"?><Types/>')
+    z.writestr('ppt/slides/slide1.xml', '<?xml version=\"1.0\"?><p:sld>' + names + '</p:sld>')"
+python3 "$COUNTER" 8843 > "$CACHE/.count.txt" 2>/dev/null &
+COUNTPID=$!
+sleep 1
+UNTOFU_GITHUB_API=http://127.0.0.1:8843 $BIN scan "$BUDGETDOC" >/dev/null 2>&1
+kill -TERM $COUNTPID 2>/dev/null; wait $COUNTPID 2>/dev/null
+sleep 1
+BUDGET_REQUESTS=$(cat "$CACHE/.count.txt" 2>/dev/null | tr -d ' \n')
+# Three faces x three license directories is nine without the memo; one
+# family's worth is three. The lower bound matters as much as the upper one:
+# zero means the scan never got as far as a listing, and the first version of
+# this test scored exactly that as a pass.
+check "$([ -n "$BUDGET_REQUESTS" ] && [ "$BUDGET_REQUESTS" -ge 1 ] \
+      && [ "$BUDGET_REQUESTS" -le 4 ] && echo 1 || echo 0)" "1" \
+      "three faces of one family cost one family's worth of listings (got ${BUDGET_REQUESTS:-none})"
+rm -f "$COUNTER" "$BUDGETDOC" "$CACHE/.count.txt"
+
+echo
 echo "== hostile input =="
 # The agent parses font files it did not write — from ~/Downloads, from Office
 # and Adobe directories, and from google/fonts. A hang there is not a crash in
