@@ -192,9 +192,30 @@ final class Cache {
                    + "\(entries.count) face(s) already indexed")
         }
 
+        // Adopt what is on disk, then put back what this process has published
+        // in memory but not yet written — the same discipline persist() ends
+        // with, for the same reason.
+        //
+        // Plain assignment discarded live work. A fetch publishes its face into
+        // `index`, unlocks, then blocks in flock(LOCK_EX) behind another
+        // worker's write; with four fetches in flight the two-second watcher
+        // fires inside that window and hands the in-memory map the on-disk one,
+        // which does not have the new face. The font ends up in the cache
+        // directory, indexed nowhere, after the user has been told it arrived.
+        //
+        // Merging with "mine wins" would fix that and break something else: an
+        // entry deleted on disk by `untofu verify` in another process would
+        // never leave memory, and the agent would go on serving a path that is
+        // gone. Only the pending set is genuinely ours to keep.
         lock.lock()
-        if let freshIndex { index = freshIndex }
-        if let freshNegative { negative = freshNegative.mapValues { Date(timeIntervalSince1970: $0) } }
+        if let freshIndex {
+            index = freshIndex
+            for (key, value) in pendingIndex { index[key] = value }
+        }
+        if let freshNegative {
+            negative = freshNegative.mapValues { Date(timeIntervalSince1970: $0) }
+            for (key, value) in pendingNegative { negative[key] = Date(timeIntervalSince1970: value) }
+        }
         lock.unlock()
     }
 

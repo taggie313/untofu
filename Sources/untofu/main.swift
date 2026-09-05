@@ -330,6 +330,8 @@ case "scan":
     let scanBudget = 15
     var attempted = 0
     var fetchedAny = false
+    let scanLocal = LocalFonts()
+    scanLocal.refresh(gated: gatedPolicy())
     let catalogue = GoogleFonts.knownFamilySlugs()
     if catalogue.isEmpty {
         FileHandle.standardError.write(Data("could not read the Google Fonts catalogue; is the network up?\n".utf8))
@@ -359,6 +361,16 @@ case "scan":
         for name in names {
             if Scanner.isAlreadyAvailable(name) { report(name, "already installed"); continue }
             if cache.path(for: name) != nil     { report(name, "already cached");    continue }
+            // The local index, which scan did not consult at all. A deck naming
+            // its CJK fonts in Japanese and Korean — 游ゴシック Light, 맑은 고딕,
+            // 等线 Light — was told all four were "not on Google Fonts", while
+            // the agent was serving every one of them out of the Office bundles.
+            // True about Google Fonts, and useless: the question the user is
+            // asking is whether this document will render.
+            if let path = scanLocal.path(for: name) {
+                report(name, "already here — \(scanLocal.origin(ofPath: path) ?? "on this Mac")")
+                continue
+            }
             if Resolver.isKnownProprietary(name) { report(name, "skipped, proprietary"); continue }
 
             // The question is not "does this look like a font?" but "is this a

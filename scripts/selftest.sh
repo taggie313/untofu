@@ -243,6 +243,20 @@ open('$HOSTILE','wb').write(b'ttcf' + struct.pack('>I',0x00010000) + struct.pack
   perl -e 'alarm 90; exec @ARGV' $BIN folders --rescan >/dev/null 2>&1
   check "$?" "0" "a font collection claiming four billion faces does not hang the parser"
   rm -f "$HOSTILE"
+
+  # A zip bomb. `untofu scan` unzips whatever it is handed, and deflate reaches
+  # about 1000:1, so a small archive decompresses to whatever its author chose.
+  # Before the ceiling this drove peak memory to 1.04 GB for a 2 MB input, and
+  # the reporter measured over 6 GB for a 3 MB one.
+  BOMB="$CACHE/.bomb.pptx"
+  python3 -c "
+import zipfile
+with zipfile.ZipFile('$BOMB','w',zipfile.ZIP_DEFLATED) as z:
+    z.writestr('[Content_Types].xml','<?xml version=\"1.0\"?><Types/>')
+    z.writestr('ppt/slides/slide1.xml', b'\0' * (512*1024*1024))"
+  perl -e 'alarm 60; exec @ARGV' $BIN scan "$BOMB" --dry-run >/dev/null 2>&1
+  check "$?" "0" "a 512 MB zip bomb is cut off rather than read whole"
+  rm -f "$BOMB"
   $BIN folders --rescan >/dev/null 2>&1
   # ...and the bound must not have broken real collections, which is the whole
   # reason the claimed count cannot simply be ignored.
