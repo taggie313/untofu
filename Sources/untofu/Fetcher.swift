@@ -86,7 +86,7 @@ enum Fetcher {
         for slug in candidates {
             for license in GoogleFonts.licenseDirs {
                 let files: [GoogleFonts.RemoteFile]
-                switch GoogleFonts.listing(license: license, slug: slug) {
+                switch GoogleFonts.listing(license: license, slug: slug, wanting: psName) {
                 case .found(let f): files = f
                 case .absent: continue
                 case .unreachable(let why): blocked = why; continue

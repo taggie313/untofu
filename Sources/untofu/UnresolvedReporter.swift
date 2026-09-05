@@ -30,9 +30,9 @@ final class UnresolvedReporter {
     /// 27. The user is looking at a wrong-looking document the whole time.
     private let queue = DispatchQueue(label: "net.elusive.untofu.unresolved",
                                       qos: .userInitiated)
-    private var pending: [String] = []
-    private var requester: String?
-    private var requesterBundle: String?
+    /// Each missing name with the requester that asked for it, so the two can
+    /// never drift apart while the window is open.
+    private var pending: [(name: String, requester: String?, bundle: String?)] = []
     private var scheduled: DispatchWorkItem?
 
     init(preferences: Preferences, local: LocalFonts? = nil) {
@@ -48,9 +48,15 @@ final class UnresolvedReporter {
             return
         }
         queue.async {
-            if !self.pending.contains(psName) { self.pending.append(psName) }
-            if let requester { self.requester = requester }
-            if let bundleID { self.requesterBundle = bundleID }
+            // Kept together. Names accumulated while the requester was
+            // overwritten by each call, so a panel headed by the first font
+            // named the app that asked for the LAST one — two applications
+            // missing different fonts inside the four-second window produced one
+            // panel confidently attributing both to whichever asked second, and
+            // a miss report carrying that same wrong bundle id.
+            if !self.pending.contains(where: { $0.name == psName }) {
+                self.pending.append((name: psName, requester: requester, bundle: bundleID))
+            }
             self.scheduled?.cancel()
             let work = DispatchWorkItem { [weak self] in self?.flush() }
             self.scheduled = work
@@ -60,15 +66,29 @@ final class UnresolvedReporter {
 
     private func flush() {
         guard !pending.isEmpty else { return }
-        let names = pending
-        let who = requester
-        let bundle = requesterBundle
+        let batch = pending
         pending = []
-        requester = nil
-        requesterBundle = nil
 
+        let names = batch.map(\.name)
+        // The panel is headed by the first name, so the report and the "who
+        // asked" line must belong to that one.
+        let bundle = batch[0].bundle
+        // Only claim an application when they all agree. Two apps inside one
+        // window is a real case, and naming either of them would be a guess
+        // presented as a fact.
+        let requesters = Set(batch.compactMap(\.requester))
+        let who = requesters.count == 1 ? requesters.first : nil
+
+        let attribution: String
+        if let who {
+            attribution = who
+        } else if requesters.isEmpty {
+            attribution = "an unknown process"
+        } else {
+            attribution = "\(requesters.count) different applications"
+        }
         Log.info("unresolved panel: \(names.joined(separator: ", "))"
-               + "  (requested by \(who ?? "an unknown process")"
+               + "  (requested by \(attribution)"
                + (bundle.map { ", \($0)" } ?? ", bundle id unavailable") + ")")
         let preferences = self.preferences
         let local = self.local

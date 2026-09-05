@@ -330,6 +330,16 @@ final class MissPanel: NSObject, NSWindowDelegate {
             column.addArrangedSubview(
                 label(summary, font: .systemFont(ofSize: 11), color: .tertiaryLabelColor))
         }
+        // A waiting update, in a window that is already open. The weekly check
+        // wrote its answer to preferences.json and nothing ever said it out
+        // loud, so anyone who installed the .pkg — the audience with no
+        // `brew upgrade` — consented to a check whose result they could not see.
+        if let seen = Preferences().value(\.lastSeenVersion),
+           Updater.isNewer(seen, than: Build.version) {
+            column.addArrangedSubview(
+                label("untofu \(seen) is available — you have \(Build.version).",
+                      font: .systemFont(ofSize: 11), color: .tertiaryLabelColor))
+        }
 
         statusLabel = label("", font: .systemFont(ofSize: 11), color: .secondaryLabelColor)
         statusLabel.isHidden = true

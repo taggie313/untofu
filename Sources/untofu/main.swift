@@ -325,8 +325,35 @@ case "install":
     }
 
 case "uninstall":
-    try? LaunchAgent.uninstall()
-    print("Removed \(LaunchAgent.label). Cached fonts in \(Cache.root.path) were left alone.")
+    let removal = LaunchAgent.uninstall()
+    if removal.removedOwnPlist {
+        print("Removed the login agent \(LaunchAgent.label).")
+    } else if removal.hadOwnPlist {
+        print("Could not remove \(LaunchAgent.plistURL.path) — it is still there.")
+    } else if removal.stopped {
+        print("Stopped \(LaunchAgent.label). untofu had installed no login agent of its own.")
+    } else {
+        print("untofu had installed no login agent of its own.")
+    }
+    if removal.homebrewRemains {
+        print("")
+        print("Still installed: a Homebrew-managed service (\(LaunchAgent.brewLabel)).")
+        print("This command cannot remove it. To remove it:")
+        print("  brew services stop untofu")
+        print("  brew uninstall untofu")
+    }
+    if removal.pkgRemains {
+        print("")
+        print("Still installed: the .pkg agent at \(LaunchAgent.pkgPlistURL.path).")
+        print("It is stopped for now and comes back at the next login. To remove it:")
+        print("  sudo rm \(LaunchAgent.pkgPlistURL.path)")
+        print("  sudo rm /usr/local/bin/untofu")
+    }
+    print("")
+    print("Cached fonts in \(Cache.root.path) were left alone.")
+    // Non-zero when something the user asked to be rid of is still there, so a
+    // script is not told the job is done when it plainly is not.
+    if !removal.complete { exit(1) }
 
 case "status":
     let probe = Provider(cache: cache)
@@ -360,6 +387,16 @@ case "status":
         ? "allowed, weekly" : "only when you ask"
     print("updates:    \(updatePolicy)"
         + (preferences.value(\.updateOfferMade) ? "" : " (you have not been asked yet)"))
+    // What the weekly check found, if anything. Without this, consenting to
+    // automatic checks changed nothing a user could ever observe: the agent
+    // asked GitHub, wrote the answer to preferences.json, and that was the end
+    // of it. For the .pkg audience — who have no `brew upgrade` — that consent
+    // was the only route by which a fix could reach them, and it went nowhere.
+    if let seen = preferences.value(\.lastSeenVersion),
+       Updater.isNewer(seen, than: Build.version) {
+        print("            untofu \(seen) is available. You have \(Build.version).")
+        print("            \(Updater.releasesPage.absoluteString)")
+    }
     if !hookAvailable { exit(3) }
 
 case "scan":
@@ -591,10 +628,14 @@ case "folders":
             print("given to it does not stick — it re-prompted on a later restart of")
             print("the same binary. So the reading happens here, once, and the agent")
             print("serves what this records without ever opening those directories.\n")
-            warmed.refresh(rebuild: true, gated: .walk)
+            // Not a rebuild. The gated stashes are paths this snapshot has
+            // never seen, so they are read regardless; forcing everything else
+            // to be re-read as well cost about a minute of pointless I/O on
+            // every `--allow`, `--rescan` and `--deny`.
+            warmed.refresh(gated: .walk)
         } else {
             print("Leaving them alone, and dropping them from the index…")
-            warmed.refresh(rebuild: true, gated: .exclude)
+            warmed.refresh(gated: .exclude)
         }
         if let scan = warmed.summary {
             print("\(scan.faces) face(s) from \(scan.files) file(s)"

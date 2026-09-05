@@ -140,9 +140,58 @@ enum LaunchAgent {
         }
     }
 
-    static func uninstall() throws {
-        _ = run("/bin/launchctl", ["bootout", "gui/\(getuid())/\(label)"])
-        try? FileManager.default.removeItem(at: plistURL)
+    /// Where the .pkg installer puts its plist — the system domain, root-owned,
+    /// under the same label as the standalone agent.
+    static var pkgPlistURL: URL {
+        URL(fileURLWithPath: "/Library/LaunchAgents/\(label).plist")
+    }
+
+    /// Whether Homebrew has this formula installed, service running or not.
+    static var brewInstalled: Bool {
+        if brewServiceLoaded { return true }
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents")
+        return brewLabels.contains {
+            FileManager.default.fileExists(atPath: dir.appendingPathComponent("\($0).plist").path)
+        }
+    }
+
+    /// What an uninstall actually managed to do.
+    struct UninstallOutcome {
+        var hadOwnPlist = false
+        var removedOwnPlist = false
+        var stopped = false
+        var homebrewRemains = false
+        var pkgRemains = false
+        var complete: Bool { !homebrewRemains && !pkgRemains }
+    }
+
+    /// Removes the agent this code installs — and only that one.
+    ///
+    /// It used to `throws` without ever throwing (the bootout status was
+    /// discarded with `_ =`, the removal with `try?`), and the caller printed
+    /// "Removed …" unconditionally. So a Homebrew user — the install path the
+    /// README recommends first — was told the agent was gone while it went on
+    /// running and went on starting at every login. A .pkg user got a message
+    /// that was briefly true: the shared label means bootout does stop it, but
+    /// the plist it deletes is in ~/Library while the .pkg's is in /Library, so
+    /// launchd brings it back at the next login.
+    ///
+    /// Neither can be removed from here: a Homebrew service belongs to `brew`,
+    /// and the .pkg's plist is root-owned. Reporting them is the whole fix.
+    @discardableResult
+    static func uninstall() -> UninstallOutcome {
+        var outcome = UninstallOutcome()
+        outcome.hadOwnPlist = FileManager.default.fileExists(atPath: plistURL.path)
+        outcome.stopped = run("/bin/launchctl",
+                              ["bootout", "gui/\(getuid())/\(label)"]).status == 0
+        if outcome.hadOwnPlist {
+            try? FileManager.default.removeItem(at: plistURL)
+            outcome.removedOwnPlist = !FileManager.default.fileExists(atPath: plistURL.path)
+        }
+        outcome.homebrewRemains = brewInstalled
+        outcome.pkgRemains = FileManager.default.fileExists(atPath: pkgPlistURL.path)
+        return outcome
     }
 
     /// Nudges a running agent to re-read the on-disk index.

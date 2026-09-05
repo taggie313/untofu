@@ -234,13 +234,16 @@ echo "== hostile input =="
 # relying on a variable that is set later — `set -u` makes that fatal.
 restore_prefs
 if [ "$($BIN folders | grep -c '^Also searched')" = "1" ]; then
+  # Warm the snapshot FIRST, so the timed run parses the hostile file and
+  # almost nothing else. Without this the measurement is dominated by a cold
+  # 1.35 GB walk — which is real work, unrelated to the claim, and made the
+  # ceiling a test of how busy the machine happened to be.
+  $BIN folders --rescan >/dev/null 2>&1
   HOSTILE="$HOME/Downloads/untofu-selftest-hostile.ttc"
   python3 -c "
 import struct
 open('$HOSTILE','wb').write(b'ttcf' + struct.pack('>I',0x00010000) + struct.pack('>I',0xFFFFFFFF))"
-  # Generous ceiling: this walks the gated folders, which is real work. The
-  # assertion is that it FINISHES, not that it is quick.
-  perl -e 'alarm 90; exec @ARGV' $BIN folders --rescan >/dev/null 2>&1
+  perl -e 'alarm 60; exec @ARGV' $BIN folders --rescan >/dev/null 2>&1
   check "$?" "0" "a font collection claiming four billion faces does not hang the parser"
   rm -f "$HOSTILE"
 
@@ -301,6 +304,42 @@ $BIN install --no-such-flag >/dev/null 2>&1
 check "$?" "64" "install refuses an option it cannot pass to the agent"
 check "$($BIN install --no-such-flag 2>&1 | grep -c 'Options it can carry')" "1" \
       "and says which ones it can"
+
+echo
+echo "== reporting the truth =="
+# `untofu uninstall` printed "Removed ..." unconditionally, but it can only
+# remove the login agent it installed itself. A Homebrew user — the install path
+# the README recommends first — was told the agent was gone while it kept
+# running and kept starting at every login.
+# The suite stops the Homebrew service for its own isolation, so the
+# "a Homebrew service remains" branch cannot fire here. What can be asserted
+# in every configuration is the part that was actually wrong: it must not
+# claim to have removed something it did not remove.
+UNOUT=$($BIN uninstall 2>&1)
+check "$(echo "$UNOUT" | grep -c 'no login agent of its own')" "1" \
+      "uninstall says plainly when there was nothing of its own to remove"
+check "$(echo "$UNOUT" | grep -c '^Removed the login agent')" "0" \
+      "and does not claim a removal it did not perform"
+$BIN uninstall >/dev/null 2>&1
+check "$?" "0" "exiting 0 when nothing is left behind"
+
+# The weekly update check wrote its answer to preferences.json and nothing ever
+# said it aloud, so consenting to it changed nothing observable — and the .pkg
+# audience, who have no `brew upgrade`, had no other route to a fix.
+python3 -c "
+import json,os
+p=os.path.expanduser('$CACHE/preferences.json')
+d=json.load(open(p)) if os.path.exists(p) else {}
+d['lastSeenVersion']='99.9.9'
+json.dump(d,open(p,'w'))"
+check "$($BIN status | grep -c 'untofu 99.9.9 is available')" "1" \
+      "a version the weekly check found is actually surfaced"
+python3 -c "
+import json,os
+p=os.path.expanduser('$CACHE/preferences.json')
+d=json.load(open(p)); d.pop('lastSeenVersion',None); json.dump(d,open(p,'w'))"
+check "$($BIN status | grep -c 'is available')" "0" \
+      "and nothing is claimed when there is no newer version"
 
 echo
 echo "== stats =="

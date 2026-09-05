@@ -95,7 +95,7 @@ enum GoogleFonts {
     }
 
     /// What `<license>/<slug>/` holds — or why we cannot say.
-    static func listing(license: String, slug: String) -> Availability {
+    static func listing(license: String, slug: String, wanting: String? = nil) -> Availability {
         if let reason = paused { return .unreachable(reason) }
 
         let api = URL(string: "\(apiBase)/repos/google/fonts/contents/\(license)/\(slug)")!
@@ -132,22 +132,46 @@ enum GoogleFonts {
             return RemoteFile(name: name, url: url)
         }
         // An empty directory is a real answer: the family is not served here.
-        return files.isEmpty ? .absent : .found(order(files))
+        return files.isEmpty ? .absent : .found(order(files, wanting: wanting))
     }
 
     /// Variable fonts first — a single `Family[wght].ttf` carries every named
     /// instance, so one download usually satisfies the whole family. Then plain
     /// upright faces, since an italic request still names the roman family.
-    private static func order(_ files: [RemoteFile]) -> [RemoteFile] {
-        files.sorted { a, b in
+    /// Files in the order most likely to satisfy `wanted`, best first.
+    ///
+    /// Variable fonts stay ahead of statics because one of them usually carries
+    /// the whole family. What changed is the italic rule: it was a flat "italics
+    /// last", which is right when an upright was asked for and exactly backwards
+    /// when an italic was. Only eight files are ever downloaded
+    /// (`Fetcher.maxDownloadsPerAttempt`), so in a large static-only family —
+    /// Poppins ships 18 files, Kanit 18 — the italic the user actually asked for
+    /// sat past the cut and the font was reported unavailable while being
+    /// perfectly fetchable.
+    private static func order(_ files: [RemoteFile], wanting wanted: String? = nil) -> [RemoteFile] {
+        let wantsItalic = wanted.map(isItalicName) ?? false
+        return files.sorted { a, b in
             func rank(_ f: RemoteFile) -> Int {
-                if f.name.contains("[") { return f.name.contains("Italic") ? 1 : 0 }
-                if f.name.contains("Italic") { return 3 }
-                return 2
+                let italic = f.name.contains("Italic") || f.name.contains("italic")
+                if f.name.contains("[") { return italic == wantsItalic ? 0 : 1 }
+                return italic == wantsItalic ? 2 : 3
             }
             let (ra, rb) = (rank(a), rank(b))
             return ra == rb ? a.name < b.name : ra < rb
         }
+    }
+
+    /// Whether a requested name is asking for an italic.
+    ///
+    /// "Oblique" counts — several families spell it that way — but a family
+    /// whose NAME contains the word must not be dragged in, so this looks only
+    /// at the style half, after the first hyphen or space.
+    static func isItalicName(_ psName: String) -> Bool {
+        let style = psName.split(separator: "-", maxSplits: 1).dropFirst().first
+            ?? psName.split(separator: " ", maxSplits: 1).dropFirst().first
+            ?? ""
+        let lowered = style.lowercased()
+        return lowered.contains("italic") || lowered.contains("oblique")
     }
 
     /// One downloaded file, or why it did not arrive.
