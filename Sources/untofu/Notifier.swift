@@ -77,10 +77,15 @@ final class Notifier {
                           body: "\(sentence(families)) — \(reopen)")
         case .dialog:
             let list = families.map { "•  \($0)" }.joined(separator: "\n")
+            // The running total, in a window that is already open. This tool is
+            // deliberately invisible, which leaves a user with no way to know it
+            // has ever done anything; the answer is to say so at the moment it
+            // just did, not to invent a menu bar item or a nagging window.
+            let total = Stats.summaryLine().map { "\n\n\($0)" } ?? ""
             DispatchQueue.main.async {
                 let alert = NSAlert()
                 alert.messageText = headline
-                alert.informativeText = "\(list)\n\n\(reopen)"
+                alert.informativeText = "\(list)\n\n\(reopen)\(total)"
                 alert.alertStyle = .informational
                 alert.icon = Icon.image()
                 alert.addButton(withTitle: "OK")

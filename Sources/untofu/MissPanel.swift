@@ -321,6 +321,16 @@ final class MissPanel: NSObject, NSWindowDelegate {
         suppressCheckbox.font = .systemFont(ofSize: 12)
         column.addArrangedSubview(suppressCheckbox)
 
+        // What it HAS managed, in the window that is telling you what it could
+        // not. This is the only place a user finds out the thing has been
+        // working at all — an agent with no icon and no window gives you nothing
+        // to notice — and it belongs here rather than in a window of its own,
+        // which would be exactly the interruption this tool exists to avoid.
+        if let summary = Stats.summaryLine() {
+            column.addArrangedSubview(
+                label(summary, font: .systemFont(ofSize: 11), color: .tertiaryLabelColor))
+        }
+
         statusLabel = label("", font: .systemFont(ofSize: 11), color: .secondaryLabelColor)
         statusLabel.isHidden = true
         column.addArrangedSubview(statusLabel)

@@ -21,6 +21,44 @@ enum LaunchAgent {
             .appendingPathComponent("Library/Logs/untofu.log")
     }
 
+    /// Everywhere this tool's log might be, because that depends on how it was
+    /// installed and `logURL` only knows about one of them.
+    ///
+    /// `logURL` is where the standalone agent writes, because that is the plist
+    /// this code generates. A Homebrew-managed service writes to the prefix's
+    /// `var/log` instead, named by Homebrew's own formula DSL. Reading history
+    /// from `logURL` alone therefore found nothing at all on a machine running
+    /// the Homebrew build — which is every machine that installed it the
+    /// recommended way.
+    static var logCandidates: [URL] {
+        // Same seam as UNTOFU_GITHUB_API: the seeding logic is only interesting
+        // for the lines it must NOT count, and there is no way to exercise that
+        // against a real log without waiting for one to contain the right
+        // mistakes. Not documented in --help; it is a seam, not a feature.
+        if let override = ProcessInfo.processInfo.environment["UNTOFU_LOG"], !override.isEmpty {
+            return [URL(fileURLWithPath: override)]
+        }
+        var paths = [logURL]
+        // Derive the prefix from where this binary actually lives, so an
+        // unusual Homebrew prefix is handled without guessing, then fall back
+        // to the two standard ones.
+        let executable = URL(fileURLWithPath: currentExecutablePath())
+        var walk = executable
+        while walk.pathComponents.count > 2 {
+            walk.deleteLastPathComponent()
+            if walk.lastPathComponent == "opt" || walk.lastPathComponent == "Cellar" {
+                let prefix = walk.deletingLastPathComponent()
+                paths.append(prefix.appendingPathComponent("var/log/untofu.log"))
+                break
+            }
+        }
+        for prefix in ["/opt/homebrew", "/usr/local"] {
+            paths.append(URL(fileURLWithPath: "\(prefix)/var/log/untofu.log"))
+        }
+        var seen = Set<String>()
+        return paths.filter { seen.insert($0.path).inserted }
+    }
+
     /// What Homebrew calls its service for this formula.
     ///
     /// Two labels, because Homebrew renamed the scheme: it was

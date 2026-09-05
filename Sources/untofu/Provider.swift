@@ -33,6 +33,11 @@ final class Provider {
     /// twenty distinct missing fonts would park twenty threads waiting on the
     /// network. OperationQueue runs at most `maxConcurrentOperationCount` at a
     /// time and leaves the rest as objects, not threads.
+    /// Counts what this agent has done, for `untofu stats` and the one line the
+    /// panels carry. Nil for the short-lived probe in `status`, which would
+    /// otherwise record serves it never performed.
+    let stats: Stats?
+
     private let queue: OperationQueue = {
         let q = OperationQueue()
         q.name = "net.elusive.untofu.resolve"
@@ -48,7 +53,8 @@ final class Provider {
 
     init(cache: Cache, local: LocalFonts? = nil,
          notifier: Notifier? = nil, reporter: UnresolvedReporter? = nil,
-         fetchForBrowsers: Bool = false) {
+         fetchForBrowsers: Bool = false, stats: Stats? = nil) {
+        self.stats = stats
         self.cache = cache
         self.local = local
         self.notifier = notifier
@@ -84,6 +90,7 @@ final class Provider {
 
         if let path = cache.path(for: psName) {
             Log.info("hit  \(psName)  (pid \(pid))")
+            stats?.record(servedCache: 1)
             return path
         }
 
@@ -97,6 +104,7 @@ final class Provider {
         // arrives, so the document renders correctly the first time.
         if let path = local?.path(for: psName) {
             Log.info("local \(psName)  (pid \(pid)) <- \(local?.origin(ofPath: path) ?? "disk")")
+            stats?.record(servedLocal: 1)
             return path
         }
 
@@ -144,8 +152,12 @@ final class Provider {
                     + "[\(bundle ?? "no bundle id")] (pid \(pid))")
             Fetcher.fetch(psName: psName, into: self.cache,
                           observer: Fetcher.Observer(
-                              resolved: { [weak self] in self?.notifier?.record(family: $0, app: app) },
+                              resolved: { [weak self] in
+                                  self?.stats?.record(fetched: 1)
+                                  self?.notifier?.record(family: $0, app: app)
+                              },
                               unresolved: { [weak self] in
+                                  self?.stats?.record(unresolved: 1)
                                   self?.reporter?.record(psName: $0, requester: app, bundleID: bundle)
                               }))
             self.inFlightLock.lock()

@@ -33,7 +33,7 @@ if brew services list 2>/dev/null | grep -qE '^untofu +started'; then
 fi
 
 STATE_BACKUP=$(mktemp -d)
-for f in preferences.json local-index.json index.json negative.json; do
+for f in preferences.json local-index.json index.json negative.json stats.json; do
   [ -f "$CACHE/$f" ] && cp "$CACHE/$f" "$STATE_BACKUP/$f"
 done
 # The fetched fonts themselves, not just the index naming them. Several sections
@@ -55,7 +55,7 @@ restore_all() {
 # together so neither is put back without the other.
 restore_cache() {
   mkdir -p "$CACHE"
-  for f in index.json negative.json; do
+  for f in index.json negative.json stats.json; do
     [ -f "$STATE_BACKUP/$f" ] && cp "$STATE_BACKUP/$f" "$CACHE/$f"
   done
   if [ -d "$STATE_BACKUP/fonts" ]; then
@@ -218,6 +218,40 @@ check "$(proprietary 'Aptos Display')" "1" "with no catalogue, still suppresses 
 # suppression silently disables the tool. Asserted so the trade-off is visible.
 check "$(proprietary 'MS Outlook')" "0" "with no catalogue, the word rule stands down for MS Outlook"
 check "$(proprietary 'MS Reference Specialty')" "1" "but a literal slug is suppressed regardless"
+
+echo
+echo "== stats =="
+# An agent with no icon and no window gives a user no way to know it works. The
+# counters are the answer, and they have to be counted rather than grepped back
+# out of log prose — the first attempt at seeding read "local index: 581
+# unregistered face(s)", a startup report, as 581 documents helped.
+STATSLOG="$CACHE/.statstest.log"
+cat > "$STATSLOG" <<'LOGEOF'
+2026-08-15 09:57:15 untofu running — 2 face(s) cached
+2026-08-15 09:57:15 local index: 581 unregistered face(s) from 675 walked file(s)
+2026-08-15 10:01:02 local Calibri  (pid 100) <- Microsoft Office
+2026-08-15 10:01:03 local Aptos  (pid 100) <- Microsoft Office
+2026-08-15 10:02:00 hit  Lora-Regular  (pid 101)
+2026-08-15 10:03:00 fetched Karla <- ofl/karla/Karla.ttf (12 face(s) indexed)
+2026-08-15 10:04:00 unresolved ZZNope — no Google Fonts family answers to it
+2026-08-15 10:04:04 unresolved panel: ZZNope, ZZOther
+2026-08-15 10:05:00 adopted the record: 581 local face(s), 13 from folders
+2026-08-15 10:06:00 reloaded — 0 cached face(s), 581 local face(s)
+LOGEOF
+rm -f "$CACHE/stats.json"
+UNTOFU_LOG="$STATSLOG" $BIN stats >/dev/null 2>&1
+statfield() { python3 -c "
+import json,os
+try: print(json.load(open(os.path.expanduser('$CACHE/stats.json')))['$1'])
+except Exception: print('missing')"; }
+check "$(statfield servedLocal)" "2" "counts real local serves"
+check "$(statfield servedCache)" "1" "counts cache hits"
+check "$(statfield fetched)"     "1" "counts fetches"
+check "$(statfield unresolved)"  "1" "counts genuine misses, not the panel line"
+# The three lines that are prose about the index, not work done for anyone.
+check "$(UNTOFU_LOG="$STATSLOG" $BIN stats | grep -cE '^ +58[01] ')" "0" \
+      "a startup index report is not mistaken for hundreds of serves"
+rm -f "$STATSLOG" "$CACHE/stats.json"
 
 echo
 echo "== name forms =="

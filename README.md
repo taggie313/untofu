@@ -200,6 +200,37 @@ for that font's licence, not for this tool. `untofu local` shows exactly what
 would be served and where each face came from; `--no-local` turns the whole thing
 off.
 
+### Knowing it is working
+
+An agent with no Dock icon, no menu bar and no window until something needs
+saying gives you nothing to notice. `untofu stats` is the answer:
+
+```
+$ untofu stats
+Since 15 August 2026:
+
+  159      served from fonts already on this Mac
+  101      served from the fetch cache
+  50       fetched from Google Fonts
+  49       asked for and genuinely not obtainable
+
+  260 font requests answered that would otherwise have rendered in a substitute.
+```
+
+Counted, not parsed. The log holds the same history, but reading numbers back
+out of prose means a reworded line silently becomes a wrong total — the first
+attempt read `local index: 581 unregistered face(s)`, a startup report, as 581
+documents helped. The counters live in `stats.json` beside the cache, are
+flushed at most every thirty seconds, and go nowhere.
+
+Installs that predate counting recover a starting total from the log once, and
+say so, because "0" would be both wrong and the opposite of the point.
+
+The same one-line total appears at the foot of the two windows untofu already
+draws — the "fetched these" message and the "couldn't find this" panel. It does
+not get a window of its own, which would be exactly the interruption this tool
+exists to remove.
+
 ### Resolution and verification
 
 A PostScript name is turned into candidate family slugs — `RalewayRoman-Regular`

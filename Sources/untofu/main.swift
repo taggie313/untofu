@@ -38,6 +38,7 @@ func usage() -> Never {
       untofu local              List fonts found on this Mac that no application
                                 has registered. --rebuild re-reads every file
                                 rather than trusting the stored index.
+      untofu stats              What untofu has done on this Mac.
       untofu folders            Show which font locations are searched. --allow
                                 opts into the permission-gated ones, --rescan
                                 re-reads them, --deny stops.
@@ -100,6 +101,7 @@ case "run":
     let noDialog = quiet || flags.contains("--no-dialog")
     let style: Notifier.Style = flags.contains("--banner") ? .banner : .dialog
     let local = flags.contains("--no-local") ? nil : LocalFonts()
+    let stats = Stats()
     // Whether anything will ever want to draw: true when either the success
     // notifier or the unresolved panel is enabled.
     let wantsUI = !quiet || !noDialog
@@ -107,7 +109,8 @@ case "run":
                             notifier: quiet ? nil : Notifier(style: style),
                             reporter: noDialog ? nil : UnresolvedReporter(preferences: preferences,
                                                                           local: local),
-                            fetchForBrowsers: flags.contains("--fetch-for-browsers"))
+                            fetchForBrowsers: flags.contains("--fetch-for-browsers"),
+                            stats: stats)
     guard provider.start() else {
         Log.warn("""
         CTFontManagerCreateFontRequestRunLoopSource is unavailable on this system.
@@ -171,6 +174,28 @@ case "run":
     // not once several hundred files have been parsed. Requests arriving during
     // the scan fall through to the fetch path, which is the behaviour that
     // shipped before the local index existed.
+    // Recover a starting total for installs that predate counting, so someone
+    // who has been running this for weeks is not told it has done nothing.
+    DispatchQueue.global(qos: .utility).async {
+        Stats.seedFromLogIfNeeded(logs: LaunchAgent.logCandidates)
+    }
+    // Counters are flushed at most every 30 seconds, and launchd stops this
+    // process with SIGTERM — whose default disposition kills it outright, so
+    // `atexit` never runs and the last half-minute of work is simply lost. (A C
+    // function pointer cannot capture anything either, so atexit could not reach
+    // the counters even if it did run.) A signal source is a normal closure and
+    // gets to finish the job: flush, drop the pid file, and exit zero, which the
+    // launchers read as a deliberate stop rather than something to restart.
+    signal(SIGTERM, SIG_IGN)
+    let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
+    terminate.setEventHandler {
+        stats.flush()
+        try? FileManager.default.removeItem(at: LaunchAgent.pidURL)
+        Log.info("stopping on SIGTERM")
+        exit(0)
+    }
+    terminate.resume()
+
     if let local {
         DispatchQueue.global(qos: .utility).async {
             local.refresh(gated: gatedPolicy())
@@ -590,6 +615,38 @@ case "unsuppress":
         let count = preferences.value(\.suppressedNames).count
         preferences.unsuppressAll()
         print(count == 0 ? "Nothing was suppressed." : "Cleared \(count) suppressed name(s).")
+    }
+
+case "stats":
+    // Seeding here too, not only in the agent: someone who runs this before the
+    // agent has ever restarted should still see their history.
+    Stats.seedFromLogIfNeeded(logs: LaunchAgent.logCandidates)
+    guard let c = Stats.read(), c.fetched + c.totalServed > 0 else {
+        print("untofu has not been asked for a font yet.")
+        print("Counting starts the first time it serves one. Nothing is sent anywhere.")
+        break
+    }
+    func row(_ n: Int, _ label: String) {
+        let figure = n.formatted()
+        print("  " + figure + String(repeating: " ", count: max(1, 9 - figure.count)) + label)
+    }
+    if let since = c.since {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "d MMMM yyyy"
+        print("Since \(formatter.string(from: since)):")
+        print("")
+    }
+    row(c.servedLocal, "served from fonts already on this Mac")
+    row(c.servedCache, "served from the fetch cache")
+    row(c.fetched,     "fetched from Google Fonts")
+    if c.unresolved > 0 { row(c.unresolved, "asked for and genuinely not obtainable") }
+    print("")
+    print("  \(c.totalServed.formatted()) font request\(c.totalServed == 1 ? "" : "s") answered that would "
+        + "otherwise have rendered in a substitute.")
+    if c.seededFromLog {
+        print("")
+        print("  Recovered from the log, which predates counting, so these are a")
+        print("  floor rather than an exact figure.")
     }
 
 case "verify":
