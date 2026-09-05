@@ -267,6 +267,42 @@ else
 fi
 
 echo
+echo "== cli contract =="
+# A script has to be able to tell a typo from a success. usage() used to
+# `exit(positional.isEmpty ? 1 : 0)`, which inverts both conventions at once:
+# `--help` failed, and a misspelled subcommand SUCCEEDED while printing the
+# manual to stdout with no error anywhere.
+$BIN --help >/dev/null 2>&1
+check "$?" "0" "--help succeeds"
+$BIN help >/dev/null 2>&1
+check "$?" "0" "so does the help subcommand"
+$BIN definitely-not-a-command >/dev/null 2>&1
+check "$?" "64" "an unknown subcommand fails with EX_USAGE"
+$BIN >/dev/null 2>&1
+check "$?" "64" "and so does no subcommand at all"
+
+# ...and on the right stream, so the manual never lands in a pipeline that was
+# expecting data.
+CLIOUT=$(mktemp); CLIERR=$(mktemp)
+$BIN --help >"$CLIOUT" 2>"$CLIERR"
+check "$([ -s "$CLIOUT" ] && [ ! -s "$CLIERR" ] && echo 1 || echo 0)" "1" \
+      "an asked-for manual goes to stdout"
+$BIN definitely-not-a-command >"$CLIOUT" 2>"$CLIERR"
+check "$([ ! -s "$CLIOUT" ] && [ -s "$CLIERR" ] && echo 1 || echo 0)" "1" \
+      "an unasked-for one goes to stderr"
+check "$(grep -c "unknown command 'definitely-not-a-command'" "$CLIERR")" "1" \
+      "and names the command that was wrong"
+rm -f "$CLIOUT" "$CLIERR"
+
+# `untofu install --no-dialog` used to register an agent that shows dialogs: the
+# plist ran `untofu run` with nothing after it, so every option was accepted in
+# silence and dropped.
+$BIN install --no-such-flag >/dev/null 2>&1
+check "$?" "64" "install refuses an option it cannot pass to the agent"
+check "$($BIN install --no-such-flag 2>&1 | grep -c 'Options it can carry')" "1" \
+      "and says which ones it can"
+
+echo
 echo "== stats =="
 # An agent with no icon and no window gives a user no way to know it works. The
 # counters are the answer, and they have to be counted rather than grepped back

@@ -83,7 +83,19 @@ enum LaunchAgent {
         run("/bin/launchctl", ["print", "gui/\(getuid())/\(label)"]).status == 0
     }
 
-    static func install() throws {
+    /// Flags `install` will carry into the agent it registers.
+    ///
+    /// The generated plist ran `untofu run` with nothing after it, so every
+    /// option given to `install` was accepted in silence and then dropped:
+    /// `untofu install --no-dialog` registered an agent that shows dialogs.
+    /// Anything not on this list cannot be honoured by a background agent and
+    /// is refused rather than ignored.
+    static let installableRunFlags: Set<String> = [
+        "-q", "--quiet", "-v", "--verbose", "--banner", "--no-dialog",
+        "--no-local", "--fetch-for-browsers",
+    ]
+
+    static func install(runFlags: [String] = []) throws {
         // Two agents would race over one cache — concurrent providers competing
         // to answer the same font request and clobbering each other's staging
         // directories. Refuse rather than quietly create the second one.
@@ -104,7 +116,7 @@ enum LaunchAgent {
 
         let plist: [String: Any] = [
             "Label": label,
-            "ProgramArguments": [installedBinary.path, "run"],
+            "ProgramArguments": [installedBinary.path, "run"] + runFlags,
             "RunAtLoad": true,
             // Restart on a crash, but NOT on a clean exit. `untofu run` exits 0
             // when the CoreText hook is gone — the documented end of this

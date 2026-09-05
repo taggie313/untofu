@@ -18,8 +18,32 @@ func gatedPolicy() -> LocalFonts.GatedPolicy {
     preferences.value(\.searchPersonalFolders) ? .trustSnapshot : .exclude
 }
 
-func usage() -> Never {
-    print("""
+/// Prints the manual.
+///
+/// Where it goes and what it exits with are not cosmetic — they are the
+/// difference between a script noticing a typo and silently doing nothing.
+/// It used to `exit(positional.isEmpty ? 1 : 0)`, which inverts both
+/// conventions at once: `untofu --help` failed, and `untofu stats-typo`
+/// SUCCEEDED, printing the manual to stdout with no error anywhere. A wrapper
+/// script checking `$?` could not tell a misspelled subcommand from a real one.
+///
+/// Asked for → stdout, exit 0. Got it wrong → stderr, exit 64 (EX_USAGE), so
+/// the manual never pollutes a pipeline that was expecting data.
+func usage(asked: Bool, unknown: String? = nil) -> Never {
+    let text = manual()
+    if asked {
+        print(text)
+        exit(0)
+    }
+    var message = ""
+    if let unknown { message += "untofu: unknown command '\(unknown)'\n\n" }
+    message += text + "\n"
+    FileHandle.standardError.write(Data(message.utf8))
+    exit(64)   // EX_USAGE
+}
+
+func manual() -> String {
+    return ("""
     untofu — supplies missing fonts to any macOS app, on demand.
 
     USAGE
@@ -83,7 +107,10 @@ func usage() -> Never {
       GITHUB_TOKEN                 Raises the google/fonts listing rate limit above
                                    the unauthenticated 60 requests/hour.
     """)
-    exit(positional.isEmpty ? 1 : 0)
+}
+
+if flags.contains("--help") || flags.contains("-h") || positional.first == "help" {
+    usage(asked: true)
 }
 
 if flags.contains("--version") {
@@ -271,8 +298,24 @@ case "run":
 
 case "install":
     do {
-        try LaunchAgent.install()
+        // Refuse what cannot be honoured rather than accepting it and dropping
+        // it: `untofu install --no-dialog` used to register an agent that shows
+        // dialogs, and said nothing about it.
+        let runFlags = flags.filter { LaunchAgent.installableRunFlags.contains($0) }
+        let rejected = flags.filter { !LaunchAgent.installableRunFlags.contains($0) }
+        guard rejected.isEmpty else {
+            let names = rejected.joined(separator: ", ")
+            let allowed = LaunchAgent.installableRunFlags.sorted().joined(separator: " ")
+            let message = "install cannot pass \(names) to the agent.\n"
+                        + "Options it can carry: \(allowed)\n"
+            FileHandle.standardError.write(Data(message.utf8))
+            exit(64)
+        }
+        try LaunchAgent.install(runFlags: runFlags)
         print("Installed and started \(LaunchAgent.label).")
+        if !runFlags.isEmpty {
+            print("  options: \(runFlags.joined(separator: " "))")
+        }
         print("  binary: \(LaunchAgent.installedBinary.path)")
         print("  plist:  \(LaunchAgent.plistURL.path)")
         print("  log:    \(LaunchAgent.logURL.path)")
@@ -772,5 +815,7 @@ case "dialog-test":
     host.run()
 
 default:
-    usage()
+    // An empty command line is someone asking what this is; anything else here
+    // is a name that does not exist, and the two deserve different answers.
+    usage(asked: false, unknown: positional.first.flatMap { $0.isEmpty ? nil : $0 })
 }
