@@ -117,7 +117,27 @@ struct FontFile {
         guard let tag = r.u32(0) else { return [] }
         guard tag == 0x7474_6366 else { return [0] } // 'ttcf'
         guard let count = r.u32(8) else { return [] }
-        return (0..<Int(count)).compactMap { r.u32(12 + 4 * $0).map(Int.init) }
+
+        // Bounded by what the file could actually contain, not by what it
+        // claims. Every read inside the loop is bounds-checked and returns nil
+        // past the end, which made this look safe — but the LOOP still ran once
+        // per claimed face, and the claim is an unvalidated u32. A twelve-byte
+        // file declaring 4,294,967,295 faces hung the parser for as long as it
+        // was left to run; measured at over thirty seconds before being killed.
+        //
+        // That is reachable without any privilege: font files are parsed from
+        // ~/Downloads, so a drive-by download named .ttc is enough, and the
+        // agent's index refresh never finishes — every application on the
+        // machine quietly loses local font serving.
+        //
+        // A face offset is four bytes at 12 + 4i, so a file of n bytes cannot
+        // describe more than (n - 12) / 4 of them however many it says.
+        let describable = max(0, (r.count - 12) / 4)
+        let faces = min(Int(count), describable)
+        if faces < Int(count) {
+            Log.debug("font collection claims \(count) faces but can only describe \(faces)")
+        }
+        return (0..<faces).compactMap { r.u32(12 + 4 * $0).map(Int.init) }
     }
 
     private struct ParsedNames {
@@ -313,6 +333,10 @@ struct FontFile {
 private struct Reader {
     private let d: Data
     init(_ data: Data) { d = data }
+
+    /// Size of the file, for bounding loops by what it could contain rather
+    /// than by what its header claims.
+    var count: Int { d.count }
 
     private func byte(_ o: Int) -> UInt8? {
         guard o >= 0, o < d.count else { return nil }

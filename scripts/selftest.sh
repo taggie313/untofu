@@ -220,6 +220,39 @@ check "$(proprietary 'MS Outlook')" "0" "with no catalogue, the word rule stands
 check "$(proprietary 'MS Reference Specialty')" "1" "but a literal slug is suppressed regardless"
 
 echo
+echo "== hostile input =="
+# The agent parses font files it did not write — from ~/Downloads, from Office
+# and Adobe directories, and from google/fonts. A hang there is not a crash in
+# one document: the index refresh never finishes and every application on the
+# machine quietly loses local font serving.
+#
+# A 'ttcf' header's face count is an unvalidated u32. Every read inside the loop
+# was bounds-checked and returned nil past the end, which made it look safe, but
+# the LOOP still ran once per claimed face. Twelve bytes claiming 4,294,967,295
+# faces hung the parser for over thirty seconds before being killed.
+# This section runs before the local-fonts one, so ask for ourselves rather than
+# relying on a variable that is set later — `set -u` makes that fatal.
+restore_prefs
+if [ "$($BIN folders | grep -c '^Also searched')" = "1" ]; then
+  HOSTILE="$HOME/Downloads/untofu-selftest-hostile.ttc"
+  python3 -c "
+import struct
+open('$HOSTILE','wb').write(b'ttcf' + struct.pack('>I',0x00010000) + struct.pack('>I',0xFFFFFFFF))"
+  # Generous ceiling: this walks the gated folders, which is real work. The
+  # assertion is that it FINISHES, not that it is quick.
+  perl -e 'alarm 90; exec @ARGV' $BIN folders --rescan >/dev/null 2>&1
+  check "$?" "0" "a font collection claiming four billion faces does not hang the parser"
+  rm -f "$HOSTILE"
+  $BIN folders --rescan >/dev/null 2>&1
+  # ...and the bound must not have broken real collections, which is the whole
+  # reason the claimed count cannot simply be ignored.
+  check "$($BIN explain Cambria | grep -c 'Cambria.ttc')" "1" \
+        "and a real .ttc collection still parses"
+else
+  echo "  SKIP  hostile-input test -- needs 'untofu folders --allow'"
+fi
+
+echo
 echo "== stats =="
 # An agent with no icon and no window gives a user no way to know it works. The
 # counters are the answer, and they have to be counted rather than grepped back
