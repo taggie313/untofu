@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>untofu — missing fonts, fetched instead of complained about</title>
-<meta name="description" content="Open a document with fonts you don't have and macOS substitutes something else, then asks which replacements you'd like. untofu answers the request instead: it finds the font, fetches it, and hands it to the app. Free and open source.">
+<meta name="description" content="Open a document with fonts you don't have and macOS substitutes something else, then asks which replacements you'd like. untofu answers the request instead: it finds the font, on this Mac or from Google Fonts, and hands it to the app. Free and open source.">
 
 <meta property="og:title" content="untofu">
 <meta property="og:description" content="Missing fonts, fetched instead of complained about. Free and open source.">
@@ -177,8 +177,8 @@ footer p { margin: 0 0 .7em; }
   </div>
   <p class="lede">Open a document built with fonts you don't have and macOS
      quietly swaps in something else, then asks which replacements you'd like.
-     untofu answers the request instead: it finds the font, fetches it, and
-     hands it to the application that asked.</p>
+     untofu answers the request instead: it finds the font — on this Mac
+     or from Google Fonts — and hands it to the application that asked.</p>
 
   <a class="dl" href="https://github.com/taggie313/untofu/releases/download/v0.4.10/untofu-0.4.10.pkg">
      Download for macOS
@@ -203,7 +203,7 @@ footer p { margin: 0 0 .7em; }
      same failure in a politer suit. The icon is that box with a real letter
      standing in it.</p>
 
-  <p class="disclaim">Free and open source under the MIT licence. Fetches only
+  <p class="disclaim">Free and open source under the MIT licence. Downloads only
      openly-licensed families from Google Fonts; it will not obtain a commercial
      font for you, and does not try to.</p>
 </header>
@@ -246,6 +246,59 @@ asking application — no installer, no Font Book, no dialog.</p>
 <p>Because the fetch happens in the background, the document that triggered it
 has already drawn itself with a substitute. Reopen it and the real font is
 there. Everything after that is instant.</p>
+
+<h2>Most missing fonts are already here</h2>
+
+<p>A font being missing usually doesn't mean the bytes are absent. It means
+nobody registered them. Microsoft Office ships <strong>251 faces inside its own
+application bundles</strong> — Calibri, Cambria, Aptos, the lot — and
+registers them privately, so Word can set Calibri and Keynote cannot see it.
+Adobe syncs activated Adobe Fonts into a hidden CoreSync folder under numeric
+filenames only Adobe applications resolve. Office caches fonts it downloads on
+demand somewhere else again. And then there is the font you downloaded and never
+double-clicked.</p>
+
+<p>untofu indexes all of that at startup, reading the real PostScript name out of
+each file rather than trusting its filename — which is the only reason the
+Adobe stash is usable at all — and hands the path straight back to
+CoreText.</p>
+
+<ul class="facts">
+<li><b>This is the only path fast enough.</b> <span>A fetch cannot fix the
+document that asked, because the request has to be declined while the download
+runs. The local index is built before the first request arrives, so a local hit
+is answered on the spot and the document renders correctly the first time, with
+no reopen.</span></li>
+<li><b>The right weight, not the first match.</b> <span>Every face in a family
+carries the family name, so several files answer to &ldquo;Calibri&rdquo;. The
+closest to regular upright wins, scored on the OS/2 weight axis. Without that you
+get whichever file the directory happened to list first, and a document that
+quietly comes out in italic.</span></li>
+<li><b>Read once, not once per login.</b> <span>Those stashes are 1.35&nbsp;GB
+across about 690 files: 0.13s to read warm, but 34 seconds on the first run after
+a boot — precisely the run that races your first document. Parse results are
+kept against each file's size and modification date, so later starts read no font
+bytes at all.</span></li>
+</ul>
+
+<h3>Three folders it will not open on its own</h3>
+
+<p>Office's cloud cache, Adobe's CoreSync directory and <code>~/Downloads</code>
+sit behind macOS permission prompts. A background agent with no window provoking
+<em>&ldquo;untofu would like to access files in your Downloads folder&rdquo;</em>
+is exactly the kind of unexplained dialog this tool exists to remove — and
+asking once doesn't settle it, because the prompt came back on a later restart of
+the same installed binary.</p>
+
+<p>So the walk and the serve are separated. <code>untofu folders --allow</code>
+is something you run: it reads those folders once and records what is in them.
+After that the agent serves those fonts <strong>from the record, without ever
+opening the directories</strong> — which works because a font provider never
+reads the file it names. The application does, through the sandbox extension
+CoreText issues for the returned path.</p>
+
+<p><code>untofu local</code> shows exactly what would be served and where each
+face came from. <code>--no-local</code> turns the whole thing off.</p>
 
 <h2>Where it works</h2>
 
@@ -294,12 +347,19 @@ without it, because the <code>url()</code> is right there.</p>
 <h2>What it won't do</h2>
 
 <div class="panel warn">
-  <h3>It can't get you a commercial font</h3>
+  <h3>It won't download you a commercial font</h3>
   <p>untofu fetches from the openly-licensed Google Fonts catalogue and
   nothing else. If a document wants a licensed typeface, no tool should quietly
   go and get it for you, and this one doesn't. It tells you what's missing and
   points at Adobe Fonts, MyFonts, Fontspring and WhatTheFont so you can sort out
   a licence yourself.</p>
+  <p>It will, though, serve a commercial font that is <em>already on this
+  Mac</em> and merely unregistered: the Calibri inside Office, the family you
+  activated in Adobe. Nothing is obtained and nothing leaves the machine —
+  but whether a font bundled with one application may be used by another is a
+  question for that font's licence, not for this tool. <code>untofu local</code>
+  lists exactly what would be served and where each face came from, and
+  <code>--no-local</code> turns it off entirely.</p>
 </div>
 
 <div class="panel warn">
