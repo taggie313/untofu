@@ -1121,7 +1121,7 @@ HTML
   sleep 2
   # Headless, and the OLD --headless deliberately. This used to launch a visible
   # Chrome window and sleep 18 seconds, every run of the suite. Measured on
-  # Chrome 152:
+  # Chrome 152, when a sandboxed renderer's lookup still arrived (see below):
   #   --headless      --dump-dom             hook fires, 1.5s, exits by itself
   #   --headless=new  --screenshot           hook does NOT fire — silently useless
   #   --headless=new  --virtual-time-budget  hook fires but never exits
@@ -1135,20 +1135,59 @@ HTML
   # What we actually care about is whether the hook fired, so watch for that and
   # stop the moment it is observed — typically a second or two. If it never
   # fires, we spend the ceiling and then fail, which is the right outcome.
-  "$CHROME" --headless --disable-gpu \
+  #
+  # --no-sandbox is what makes this exercise anything at all. On macOS 27.2.1 a
+  # renderer inside Chrome's sandbox never reaches the font-request hook: its
+  # lookup is dropped before the agent is asked, so in Chrome's default
+  # configuration the page is simply never heard from. Measured on 2026-11-20,
+  # all headless:
+  #   Chrome 158, sandboxed                     no request for Manrope, ever
+  #   Chrome for Testing 151, sandboxed         the same
+  #   chrome-headless-shell 151, sandboxed      the same
+  #   each of those three with --no-sandbox     `miss Manrope`, from the renderer
+  # 151 is older than the 152 this was calibrated on, and it is cut off just the
+  # same today, so a newer Chrome is not what changed. That leaves the system as
+  # the suspect — but by elimination only: nothing here was run on an older
+  # macOS. Nothing else moved it for a sandboxed Chrome 158: the page held open
+  # for 20 seconds, --headless=new, --headless=old, --screenshot,
+  # --print-to-pdf, --virtual-time-budget, larger text, local() by PostScript
+  # and full name.
+  #
+  # What this test was counting instead: Chrome 158's own browser process, which
+  # is not sandboxed, asks for "SF Pro Text" twice as it starts, and both are
+  # declined. The assertion was "exactly one decline line, of any kind", so it
+  # failed with 2 — and would have passed on 1 without the page's lookup ever
+  # having happened. Hence the font is named below, and a lookup that never
+  # arrives is its own failure, in words, rather than a count of whatever else
+  # Chrome happened to ask for.
+  #
+  # The decision under test is the same one with or without the sandbox: the
+  # renderer is the same helper binary at the same path, and its path is all
+  # RequesterPolicy reads. The page is a local file we wrote, in a throwaway
+  # profile, so nothing here needed the sandbox's protection.
+  "$CHROME" --headless --disable-gpu --no-sandbox \
         --user-data-dir=/tmp/ff-selftest-chrome --no-first-run \
         --no-default-browser-check --dump-dom "file://$BWORK/local.html" >/dev/null 2>&1 &
   CHROME_PID=$!
   for _ in $(seq 1 30); do
-    grep -q 'declined, Google Chrome' "$BWORK/d.log" && break
+    grep -q 'miss Manrope' "$BWORK/d.log" && break
     sleep 1
   done
   kill $CHROME_PID 2>/dev/null; wait $CHROME_PID 2>/dev/null
-  check "$(grep -c 'declined, Google Chrome' "$BWORK/d.log")" "1" "a Chromium local() lookup is declined"
-  check "$($BIN list | grep -ci manrope)" "0" "and the font is not downloaded"
   pkill -f 'user-data-dir=/tmp/ff-selftest-chrome' 2>/dev/null
+  # Chrome holds its profile open briefly; rm -rf races it otherwise. Spent here
+  # rather than after the checks, with the agent still running, so that a fetch
+  # the policy failed to stop has had time to land before we look for it.
+  sleep 2
+  ASKED=$(grep -c 'miss Manrope' "$BWORK/d.log")
+  DECLINED=$(grep -c 'miss Manrope.*declined, Google Chrome' "$BWORK/d.log")
+  if [ "$ASKED" = "0" ]; then
+    bad "a Chromium local() lookup is declined (Chrome never asked the agent for Manrope in 30s, so this tested NOTHING — see the comment above it)"
+  else
+    check "$DECLINED of $ASKED" "$ASKED of $ASKED" "a Chromium local() lookup is declined"
+  fi
+  check "$($BIN list | grep -ci manrope)" "0" "and the font is not downloaded"
   kill $BD 2>/dev/null; wait $BD 2>/dev/null
-  sleep 2   # Chrome holds its profile open briefly; rm -rf races it otherwise
   rm -rf "$BWORK" /tmp/ff-selftest-chrome
 else
   echo "  SKIP  Chrome not installed; browser policy untested"
