@@ -71,8 +71,11 @@ done
 [ -n "$BUILT" ] || { echo "  ✗ swift build finished but left no universal binary in .build" >&2; exit 1; }
 [ "$("$BUILT" --version 2>/dev/null)" = "untofu $VERSION" ] \
   || { echo "  ✗ $BUILT says '$("$BUILT" --version 2>/dev/null)', not 'untofu $VERSION'" >&2; exit 1; }
-lipo "$BUILT" -verify_arch arm64 x86_64 \
-  || { echo "  ✗ $BUILT is not universal" >&2; exit 1; }
+# One architecture per call: this lipo takes a second name as a second input file.
+for arch in arm64 x86_64; do
+  lipo "$BUILT" -verify_arch "$arch" \
+    || { echo "  ✗ $BUILT has no $arch slice" >&2; exit 1; }
+done
 echo "    $BUILT ($(lipo -archs "$BUILT"), SDK $SDK_VERSION)"
 cp "$BUILT" "$WORK/root/usr/local/bin/untofu"
 
