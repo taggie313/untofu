@@ -32,10 +32,26 @@ if brew services list 2>/dev/null | grep -qE '^untofu +started'; then
   sleep 1
 fi
 
+# The permission-gated walk is pointed at two directories of our own for the
+# whole run: one served in place, like Downloads, and one served from a private
+# copy, like another application's container. The suite used to plant its
+# fixtures in the real ~/Downloads and let `folders --rescan` walk Office's real
+# group container, which was tolerable while macOS answered that with a prompt.
+# On 27.2 it does not prompt: it records a denial against whatever application
+# ran the tests. Nothing below may reach the real folders.
+TESTSTASH=$(mktemp -d)
+mkdir -p "$TESTSTASH/container" "$TESTSTASH/folder"
+export UNTOFU_TEST_STASHES="$TESTSTASH"
+
 STATE_BACKUP=$(mktemp -d)
 for f in preferences.json local-index.json index.json negative.json stats.json; do
   [ -f "$CACHE/$f" ] && cp "$CACHE/$f" "$STATE_BACKUP/$f"
 done
+# The private copies of fonts taken from another application's container. The
+# record names these paths, and only a foreground rescan can make them again, so
+# wiping the cache without putting them back leaves the record pointing at
+# nothing — the same shape of damage as losing the fetched fonts below.
+[ -d "$CACHE/staged" ] && cp -a "$CACHE/staged" "$STATE_BACKUP/staged" 2>/dev/null
 # The fetched fonts themselves, not just the index naming them. Several sections
 # `rm -rf "$CACHE"` for a clean slate, which is right for the test and wrong for
 # whoever owns the machine: a few runs quietly emptied the real cache to zero
@@ -62,6 +78,12 @@ restore_cache() {
     mkdir -p "$CACHE/fonts"
     cp -a "$STATE_BACKUP/fonts/." "$CACHE/fonts/" 2>/dev/null
   fi
+  # Replaced whole, not merged: whatever the tests staged is not the user's.
+  rm -rf "$CACHE/staged"
+  [ -d "$STATE_BACKUP/staged" ] && cp -a "$STATE_BACKUP/staged" "$CACHE/staged" 2>/dev/null
+  # A test makes this unreadable on purpose; never leave it that way.
+  chmod 755 "$TESTSTASH" 2>/dev/null
+  rm -rf "$TESTSTASH"
   return 0
 }
 
@@ -97,7 +119,11 @@ cat > "${SCRATCH_PROBE}.swift" <<'PROBE'
 import CoreText
 import Foundation
 let wanted = CommandLine.arguments.dropFirst().first ?? ""
-_ = CTFontCopyPostScriptName(CTFontCreateWithName(wanted as CFString, 24, nil))
+// What came back, not what was asked for: the name of the face CoreText settled
+// on and the file it is reading. A substitute shows up here as Helvetica.
+let font = CTFontCreateWithName(wanted as CFString, 24, nil)
+let file = (CTFontCopyAttribute(font, kCTFontURLAttribute) as? URL)?.path ?? "-"
+print("\(CTFontCopyPostScriptName(font) as String)\t\(file)")
 PROBE
 swiftc -O "${SCRATCH_PROBE}.swift" -o "$SCRATCH_PROBE" 2>/dev/null
 
@@ -295,13 +321,16 @@ echo "== hostile input =="
 # This section runs before the local-fonts one, so ask for ourselves rather than
 # relying on a variable that is set later — `set -u` makes that fatal.
 restore_prefs
+# Safe to turn on unasked: with UNTOFU_TEST_STASHES set this walks our own two
+# directories and nothing of the user's. Their setting is restored on the way out.
+$BIN folders --allow >/dev/null 2>&1
 if [ "$($BIN folders | grep -c '^Also searched')" = "1" ]; then
   # Warm the snapshot FIRST, so the timed run parses the hostile file and
   # almost nothing else. Without this the measurement is dominated by a cold
   # 1.35 GB walk — which is real work, unrelated to the claim, and made the
   # ceiling a test of how busy the machine happened to be.
   $BIN folders --rescan >/dev/null 2>&1
-  HOSTILE="$HOME/Downloads/untofu-selftest-hostile.ttc"
+  HOSTILE="$TESTSTASH/folder/untofu-selftest-hostile.ttc"
   python3 -c "
 import struct
 open('$HOSTILE','wb').write(b'ttcf' + struct.pack('>I',0x00010000) + struct.pack('>I',0xFFFFFFFF))"
@@ -478,35 +507,37 @@ check "$($BIN explain 'Playfair Display' | grep -c 'playfairdisplay, playfair')"
 echo
 echo "== local fonts =="
 # Most "missing" fonts are on the disk already and merely registered to nobody.
-# The portable half of this uses a font planted in ~/Downloads, so it runs the
-# same on a machine with no Office and no Adobe installed.
+# The portable half of this uses a font planted in a gated folder of the suite's
+# own, so it runs the same on a machine with no Office and no Adobe installed.
 LOCALSRC="$CACHE/fonts/local-selftest.ttf"
 rm -rf "$CACHE"; mkdir -p "$CACHE/fonts"
 curl -sL -o "$LOCALSRC" \
   "https://raw.githubusercontent.com/google/fonts/main/ofl/lora/Lora%5Bwght%5D.ttf"
-PLANTED="$HOME/Downloads/untofu-selftest-Lora.ttf"
+PLANTED="$TESTSTASH/folder/untofu-selftest-Lora.ttf"
 # The sections above wipe the cache directory, and the user's preferences live
 # in it — so without putting them back first, every test below would see a
 # freshly-defaulted "not opted in" and skip itself no matter how the machine is
 # actually configured.
 restore_prefs
-# Downloads is gated by TCC, and the tests must never be the thing that makes
-# macOS interrupt someone. Run these only where the user has already opted in.
+# The real gated folders are behind TCC, and the tests must never be the thing
+# that makes macOS interrupt someone — or, on 27.2, silently record a refusal.
+# These walk the suite's own two directories instead (UNTOFU_TEST_STASHES), so
+# they can be switched on unasked; the user's own setting is restored at exit.
+$BIN folders --allow >/dev/null 2>&1
 PERSONAL=$($BIN folders | grep -c '^Also searched')
 if [ "$PERSONAL" != "1" ]; then
-  echo "  SKIP  gated-stash tests -- 'untofu folders --allow' not enabled;"
-  echo "        running them would fire a permission prompt at you"
+  echo "  SKIP  gated-stash tests -- could not enable the test folders"
 elif [ -s "$LOCALSRC" ]; then
   cp "$LOCALSRC" "$PLANTED"
 
   # A plain run must NOT pick it up: the CLI does not walk gated stashes either
   # unless asked. Only --rescan does, and only because the user typed it.
   $BIN local >/dev/null 2>&1
-  check "$($BIN explain Lora-Regular | grep -c '^local: *Downloads')" "0" \
+  check "$($BIN explain Lora-Regular | grep -c '^local: *Test folder')" "0" \
         "a new font in a gated folder is not picked up without --rescan"
 
   $BIN folders --rescan >/dev/null 2>&1
-  check "$($BIN explain Lora-Regular | grep -c '^local: *Downloads')" "1" \
+  check "$($BIN explain Lora-Regular | grep -c '^local: *Test folder')" "1" \
         "--rescan reads the gated folders and finds it"
 
   # ...and from then on it is served without those folders being opened again.
@@ -532,6 +563,91 @@ print(1 if any(e['gated'] for e in d['files'].values()) else 0)" 2>/dev/null)" "
   $BIN folders --rescan >/dev/null 2>&1
   check "$($BIN explain Lora-Regular | grep -c '^local: *not found')" "1" \
         "and a rescan forgets it once the file is gone"
+
+  # --- a font inside ANOTHER application's container -------------------------
+  # macOS 27.2 will not let the agent hand one of these out. The agent logged
+  # `local Segoe UI <- Office cloud fonts`, counted a serve, and the application
+  # got Helvetica: the system refused to issue the sandbox extension, silently,
+  # because neither side may read Office's group container. So those are copied
+  # out by the foreground walk and served from the copy.
+  CONTAINED="$TESTSTASH/container/4/CloudFonts/Lora/41119599467.ttf"
+  STAGED="$CACHE/staged/test-container/4/CloudFonts/Lora/41119599467.ttf"
+  mkdir -p "$(dirname "$CONTAINED")"
+  cp "$LOCALSRC" "$CONTAINED"
+  servedfrom(){ $BIN explain "$1" | sed -n 's/^local: *//p' | sed 's/.* — //'; }
+  received(){ "$SCRATCH_PROBE" "$1" 2>/dev/null; }
+
+  $BIN folders --rescan >/dev/null 2>&1
+  check "$(servedfrom Lora-Regular)" "$STAGED" \
+        "a font in another app's container is recorded at a private copy, not in place"
+  check "$(cmp -s "$CONTAINED" "$STAGED" && echo same)" "same" \
+        "and the copy is the font, byte for byte"
+
+  # Outcomes, not announcements: what a real CoreText client is handed. The
+  # control comes first — with no agent running the font must NOT arrive, or
+  # everything after this is measuring a font that was installed all along.
+  check "$(received Lora-Regular | cut -f1 | grep -c '^Lora')" "0" \
+        "control: with no agent running, the font does not reach an application"
+  # An unreachable API, so a miss cannot be papered over by fetching Lora from
+  # Google Fonts — the only way to get it here is from the copy.
+  UNTOFU_GITHUB_API=http://127.0.0.1:9 $BIN run --quiet > "$CACHE/.stage.log" 2>&1 &
+  STAGEPID=$!
+  sleep 4
+  check "$(received Lora-Regular | cut -f2)" "$STAGED" \
+        "the agent hands an application the private copy"
+
+  # A record written before any of this existed names the file where it lies.
+  # That is the path macOS refuses, so it must not be offered at all: a serve
+  # that renders as a substitute is worse than an honest miss.
+  # Keyed the way a real walk keyed it: by the RESOLVED path. The suite's own
+  # spelling of a temp directory is /var/…, a walk records /private/var/…, and a
+  # test that planted the first form passed while a record in the second was
+  # still being served from inside the container.
+  python3 -c "
+import json,os
+p='$CACHE/local-index.json'
+d=json.load(open(p))
+d['files'][os.path.realpath('$CONTAINED')]=d['files'].pop('$STAGED')
+json.dump(d, open(p,'w'))"
+  sleep 5      # the agent polls the record every 2s
+  check "$(received Lora-Regular | cut -f1 | grep -c '^Lora')" "0" \
+        "a record still pointing inside the container is not offered"
+  check "$($BIN status | grep -c 'NOT being served')" "1" \
+        "and status says a rescan is owed"
+  $BIN folders --rescan >/dev/null 2>&1
+  sleep 3
+  check "$(received Lora-Regular | cut -f2)" "$STAGED" \
+        "which a rescan puts right"
+  kill $STAGEPID 2>/dev/null; wait $STAGEPID 2>/dev/null
+  rm -f "$CACHE/.stage.log"
+
+  # Refused is not empty. A rescan run from an application macOS will not let
+  # in used to see no files and conclude there were none — forgetting every
+  # font recorded there. With copies involved it would also delete them.
+  chmod 000 "$TESTSTASH"
+  REFUSED=$($BIN folders --rescan 2>&1)
+  chmod 755 "$TESTSTASH"
+  check "$(echo "$REFUSED" | grep -c 'refused access to Test container')" "1" \
+        "a folder that cannot be opened is reported as refused"
+  check "$(servedfrom Lora-Regular)" "$STAGED" \
+        "and what was recorded from it is kept, not forgotten"
+  check "$([ -f "$STAGED" ] && echo kept || echo deleted)" "kept" \
+        "along with the copy it is served from"
+
+  rm -f "$CONTAINED"
+  $BIN folders --rescan >/dev/null 2>&1
+  check "$($BIN explain Lora-Regular | grep -c '^local: *not found')" "1" \
+        "a font removed from the container is forgotten on the next rescan"
+  check "$([ -e "$STAGED" ] && echo left || echo gone)" "gone" \
+        "and its copy is deleted with it"
+
+  cp "$LOCALSRC" "$CONTAINED"
+  $BIN folders --rescan >/dev/null 2>&1
+  $BIN folders --deny >/dev/null 2>&1
+  check "$([ -e "$CACHE/staged" ] && echo left || echo gone)" "gone" \
+        "folders --deny deletes every copy it made"
+  rm -f "$CONTAINED"
+  restore_prefs
 else
   echo "  SKIP  gated-stash tests (could not download a font to plant)"
 fi

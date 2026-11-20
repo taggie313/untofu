@@ -7,8 +7,16 @@ import Foundation
 /// lookup it performs must be a dictionary hit under a lock and nothing else —
 /// no stat, no parse, no I/O of any kind.
 final class Cache {
-    static let root = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/untofu", isDirectory: true)
+    /// Test seam, undocumented like UNTOFU_GITHUB_API: `UNTOFU_STATE_DIR` moves
+    /// every state file somewhere else, so a change can be exercised without
+    /// rewriting the record a live agent is serving from.
+    static let root: URL = {
+        if let raw = ProcessInfo.processInfo.environment["UNTOFU_STATE_DIR"], !raw.isEmpty {
+            return URL(fileURLWithPath: raw, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/untofu", isDirectory: true)
+    }()
 
     /// How long to wait before retrying a name that could not be resolved. Stops
     /// a document full of unavailable corporate fonts from hammering the network
@@ -94,13 +102,13 @@ final class Cache {
     }
 
     /// pid out of `.incoming-<pid>-<uuid>`, or nil for the old unstamped form.
-    private static func scratchOwner(_ name: String) -> pid_t? {
+    static func scratchOwner(_ name: String) -> pid_t? {
         let parts = name.split(separator: "-")
         guard parts.count >= 3, let pid = pid_t(parts[1]) else { return nil }
         return pid
     }
 
-    private static func processIsAlive(_ pid: pid_t) -> Bool {
+    static func processIsAlive(_ pid: pid_t) -> Bool {
         // 0 means it exists and we may signal it; EPERM means it exists and we
         // may not — either way it is alive. Only ESRCH means gone.
         kill(pid, 0) == 0 || errno == EPERM

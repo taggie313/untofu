@@ -16,6 +16,14 @@ import Foundation
 /// system issues the requesting process a sandbox extension for whatever URL the
 /// hook returns, which is what lets Keynote read a font out of Excel's bundle.
 ///
+/// With one exception, found the hard way: a file inside ANOTHER application's
+/// container. macOS 27.2.1 refuses to issue the extension for those unless the
+/// client or the provider already has permission to read that container, and it
+/// refuses silently — the client simply gets a substitute. (First seen there;
+/// which release changed it is not known.) Those are copied out
+/// once, by the foreground command that is allowed to read them, and served
+/// from the copy; see `Stash.stagedAs`.
+///
 /// Because the index is built before the first request arrives, a local hit is
 /// answered synchronously and the document renders correctly the first time —
 /// unlike a fetch, which is necessarily too late for the layout that triggered it.
@@ -41,6 +49,25 @@ final class LocalFonts {
         /// So these are off unless the user turns them on, deliberately, in the
         /// foreground, where the prompt is an answer to something they just did.
         let needsPermission: Bool
+        /// Set for a stash whose files cannot be served from where they are: the
+        /// name of the directory, under `stagingRoot`, that holds private copies.
+        ///
+        /// Measured on macOS 27.2.1 against Office's group container. Returning a
+        /// path in there makes the agent log `sandbox_extension_issue_file_to_
+        /// process failed … Operation not permitted`, and the application that
+        /// asked gets Helvetica. The system log shows why: before issuing the
+        /// extension the kernel asks TCC whether the client, then the provider,
+        /// may read another application's data, and TCC answers "does not allow
+        /// prompting; recording denied". No dialog, nothing to click, and a
+        /// grant would not survive the next release anyway — it is keyed to the
+        /// binary's path and hash. A file in untofu's own directory has none of
+        /// these problems, so that is where the bytes go.
+        var stagedAs: String? = nil
+    }
+
+    /// Where private copies of fonts from `stagedAs` stashes live.
+    static var stagingRoot: URL {
+        Cache.root.appendingPathComponent("staged", isDirectory: true)
     }
 
     private static let fontExtensions: Set<String> = ["ttf", "otf", "ttc", "otc", "dfont"]
@@ -65,7 +92,6 @@ final class LocalFonts {
     /// genuinely useful, and neither worth a permission dialog the user did not
     /// ask for from a process they cannot see.
     static func stashes(includingPersonal personal: Bool = false) -> [Stash] {
-        let home = FileManager.default.homeDirectoryForCurrentUser
         var found: [Stash] = []
 
         // Office bundles each carry the full set, so this is the same 251 faces
@@ -91,37 +117,126 @@ final class LocalFonts {
                            url: URL(fileURLWithPath: "/Library/Application Support/Apple/Fonts"),
                            depth: 2, includeHidden: false, needsPermission: false))
 
-        if personal {
-            // Where Office puts a font it downloaded rather than shipped — the
-            // one that closes the loop on the failure that started all of this.
-            found.append(Stash(label: "Office cloud fonts",
-                               url: home.appendingPathComponent(
-                                   "Library/Group Containers/UBF8T346G9.Office/FontCache"),
-                               depth: 4, includeHidden: false, needsPermission: true))
+        if personal { found.append(contentsOf: personalDefinitions()) }
+
+        // Present OR refused. A folder macOS will not let this process look at
+        // is still a folder that exists, and dropping it from the list here is
+        // how a refused walk used to pass for "nothing there".
+        return found.filter { presence(of: $0.url) != .absent }
+    }
+
+    /// The permission-gated places, whether or not they exist or can be read.
+    static func personalDefinitions() -> [Stash] {
+        // Test seam, undocumented like UNTOFU_GITHUB_API. The suite must be able
+        // to exercise the gated walk without reaching into the developer's real
+        // Downloads folder or Office's container — on macOS 27.2 doing that from
+        // an application without access does not even prompt, it records a
+        // denial against whatever ran the tests.
+        if let raw = ProcessInfo.processInfo.environment["UNTOFU_TEST_STASHES"], !raw.isEmpty {
+            let root = URL(fileURLWithPath: raw, isDirectory: true)
+            return [
+                Stash(label: "Test container",
+                      url: root.appendingPathComponent("container", isDirectory: true),
+                      depth: 4, includeHidden: false, needsPermission: true,
+                      stagedAs: "test-container"),
+                Stash(label: "Test folder",
+                      url: root.appendingPathComponent("folder", isDirectory: true),
+                      depth: 2, includeHidden: false, needsPermission: true),
+            ]
+        }
+
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return [
+            // Where Office puts a font it downloaded rather than shipped. Inside
+            // Office's group container, so served from a copy: see `stagedAs`.
+            Stash(label: "Office cloud fonts",
+                  url: home.appendingPathComponent(
+                      "Library/Group Containers/UBF8T346G9.Office/FontCache"),
+                  depth: 4, includeHidden: false, needsPermission: true,
+                  stagedAs: "office-cloud"),
 
             // Adobe Fonts activated through Creative Cloud, stored as hidden
             // files with numeric names. The names on disk say nothing; the
             // `name` table says everything, which is why this works at all.
-            found.append(Stash(label: "Adobe Creative Cloud",
-                               url: home.appendingPathComponent(
-                                   "Library/Application Support/Adobe/CoreSync/plugins/livetype"),
-                               depth: 3, includeHidden: true, needsPermission: true))
+            // Served in place: not a container, and measured working on 27.2.1.
+            Stash(label: "Adobe Creative Cloud",
+                  url: home.appendingPathComponent(
+                      "Library/Application Support/Adobe/CoreSync/plugins/livetype"),
+                  depth: 3, includeHidden: true, needsPermission: true),
 
             // The "I downloaded the font and never double-clicked it" case.
             // Deliberately shallow: a directory full of unrelated things, not a
-            // font library.
-            found.append(Stash(label: "Downloads",
-                               url: home.appendingPathComponent("Downloads"),
-                               depth: 2, includeHidden: false, needsPermission: true))
-        }
+            // font library. Served in place — proven with Keynote on macOS 26,
+            // NOT re-measured on 27.2.
+            Stash(label: "Downloads",
+                  url: home.appendingPathComponent("Downloads"),
+                  depth: 2, includeHidden: false, needsPermission: true),
+        ]
+    }
 
-        return found.filter { FileManager.default.fileExists(atPath: $0.url.path) }
+    enum Presence { case present, absent, denied }
+
+    /// Whether a path is there, not there, or not ours to know.
+    ///
+    /// `fileExists` folds the last two together, and they are opposites: one
+    /// means forget what was recorded, the other means keep it.
+    static func presence(of url: URL) -> Presence {
+        var info = stat()
+        if lstat(url.path, &info) == 0 { return .present }
+        return (errno == ENOENT || errno == ENOTDIR) ? .absent : .denied
     }
 
     /// The gated locations, whether or not they are currently enabled — so
     /// `untofu folders` can name what is being passed up.
     static var personalStashes: [Stash] {
         stashes(includingPersonal: true).filter(\.needsPermission)
+    }
+
+    /// One spelling per path, so a prefix test means what it says.
+    ///
+    /// A walk records the path the directory listing hands back, which is the
+    /// resolved one — `/private/var/…` for a stash given as `/var/…`. Comparing
+    /// that against the stash's own spelling matched on this Mac, where nothing
+    /// in the home directory is a symlink, and would have quietly matched
+    /// nothing for anyone whose home is reached through one.
+    private static func canonical(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    /// Directories whose files must not be served in place, as path prefixes.
+    private static var stagedSourcePrefixes: [String] {
+        personalDefinitions().filter { $0.stagedAs != nil }.map { canonical($0.url.path) + "/" }
+    }
+
+    /// True for a recorded file that would not actually reach an application.
+    ///
+    /// Two ways to get here. A record written before staging existed names the
+    /// file inside the container, which is the path macOS refuses. Or the
+    /// private copy is gone — the cache directory was cleared — while the record
+    /// survived. Either way the honest answer to a request is "not here", so the
+    /// fetch path and the dialog get their turn, rather than a logged serve that
+    /// renders as a substitute.
+    private static func cannotBeServed(_ path: String, _ entry: Entry,
+                                       sources: [String], staging: String) -> Bool {
+        guard entry.gated else { return false }
+        let path = canonical(path)
+        if path.hasPrefix(staging) { return !FileManager.default.fileExists(atPath: path) }
+        return sources.contains { path.hasPrefix($0) }
+    }
+
+    /// How many recorded files are waiting on a `folders --rescan`.
+    static var recordNeedsRescan: Int {
+        let sources = stagedSourcePrefixes
+        let staging = canonical(stagingRoot.path) + "/"
+        return loadSnapshot().filter {
+            cannotBeServed($0.key, $0.value, sources: sources, staging: staging)
+        }.count
+    }
+
+    /// Deletes every private copy. For `folders --deny`: being told to leave
+    /// those folders alone includes not keeping what was taken from them.
+    static func removeStagedCopies() {
+        try? FileManager.default.removeItem(at: stagingRoot)
     }
 
     // MARK: - Index
@@ -181,6 +296,10 @@ final class LocalFonts {
     /// rather than assumed: Calibri's own glyph data, served from a gated
     /// directory by a provider with no access to it, rendered in Keynote
     /// identically to the installed font.
+    ///
+    /// That measurement was Downloads, on macOS 26. It does not hold for another
+    /// application's container on 27.2.1, which is why those stashes are served
+    /// from a copy the walk makes; see `Stash.stagedAs`.
     enum GatedPolicy {
         /// Not opted in. Gated entries are ignored and dropped from the snapshot.
         case exclude
@@ -205,6 +324,13 @@ final class LocalFonts {
         /// Entries carried forward from the snapshot without being looked at,
         /// because looking would have prompted.
         let trusted: Int
+        /// Gated stashes this walk was refused entry to, by label. What was
+        /// recorded from them before is kept rather than forgotten.
+        var unreadable: [String] = []
+        /// Files copied into the staging area by this walk.
+        var staged: Int = 0
+        /// Recorded files not being offered; see `cannotBeServed`.
+        var needsRescan: Int = 0
     }
 
     private let lock = NSLock()
@@ -319,24 +445,76 @@ final class LocalFonts {
         var fileCount = 0
         var parsedCount = 0
         var trustedCount = 0
+        var stagedCount = 0
+        var unreadable: [String] = []
         var bytesRead: Int64 = 0
 
         // Walk what this process is allowed to walk. Under .trustSnapshot the
         // gated stashes are not even enumerated — enumerating is the thing that
         // prompts.
         let walking = LocalFonts.stashes(includingPersonal: gated == .walk)
+        if gated == .walk {
+            // A container that no longer exists has nothing current staged from it.
+            for stash in LocalFonts.personalDefinitions()
+            where LocalFonts.presence(of: stash.url) == .absent {
+                if let slug = stash.stagedAs { LocalFonts.pruneStaged(slug, keeping: []) }
+            }
+        }
         for (rank, stash) in walking.enumerated() {
-            for file in LocalFonts.fontFiles(in: stash) {
+            let found: [Found]
+            switch LocalFonts.fontFiles(in: stash) {
+            case .files(let files):
+                found = files
+            case .absent:
+                continue
+            case .denied:
+                // Refused is not empty. Treating it as empty is how a rescan run
+                // from the wrong window would quietly forget every font it had
+                // recorded — and, for a staged stash, delete the copies that are
+                // the only reason those fonts still work. Keep the record, say so.
+                guard stash.needsPermission else { continue }
+                unreadable.append(stash.label)
+                for (path, entry) in previous where entry.gated && entry.origin == stash.label {
+                    current[path] = entry
+                    trustedCount += 1
+                }
+                continue
+            }
+
+            var kept: Set<String> = []
+            for file in found {
                 fileCount += 1
+                // Where this file is served from: itself, or its private copy.
+                // The record is keyed by that, so every reader of it — this
+                // build's agent and the previous one alike — offers a path that
+                // actually works without knowing why.
+                let served = stash.stagedAs.map {
+                    LocalFonts.stagedURL(for: file.url, in: stash, slug: $0)
+                } ?? file.url
+
                 let entry: Entry
-                if let cached = previous[file.url.path],
-                   cached.size == file.size, cached.modified == file.modified {
+                if let cached = previous[served.path],
+                   cached.size == file.size, cached.modified == file.modified,
+                   stash.stagedAs == nil || LocalFonts.size(of: served) == file.size {
                     entry = Entry(size: cached.size, modified: cached.modified,
                                   names: cached.names, exact: cached.exact,
                                   plainness: cached.plainness, origin: stash.label,
                                   gated: stash.needsPermission, rank: rank)
                 } else {
-                    guard let parsed = FontFile.read(file.url) else { continue }
+                    if stash.stagedAs != nil {
+                        guard LocalFonts.stage(file.url, to: served) else {
+                            Log.warn("could not copy \(file.url.lastPathComponent) out of "
+                                   + "\(stash.label); it will not be served")
+                            continue
+                        }
+                        stagedCount += 1
+                    }
+                    // Parsed from what will be served, so a copy that cannot be
+                    // read is found out here and not by an application.
+                    guard let parsed = FontFile.read(served) else {
+                        if stash.stagedAs != nil { try? FileManager.default.removeItem(at: served) }
+                        continue
+                    }
                     entry = Entry(size: file.size, modified: file.modified,
                                   names: Array(parsed.postScriptNames),
                                   exact: Array(parsed.exactNames),
@@ -345,8 +523,12 @@ final class LocalFonts {
                     parsedCount += 1
                     bytesRead += file.size
                 }
-                current[file.url.path] = entry
+                kept.insert(served.path)
+                current[served.path] = entry
             }
+            // Only after a listing that succeeded: a copy whose original is gone
+            // is a font the user removed, and keeping it would outlive that.
+            if let slug = stash.stagedAs { LocalFonts.pruneStaged(slug, keeping: kept) }
         }
 
         // Carry forward what the CLI recorded and this process must not look at.
@@ -361,11 +543,13 @@ final class LocalFonts {
         }
 
         let elapsed = Date().timeIntervalSince(started)
-        let faces = publish(current, scan: { faces in
+        // The record keeps everything; the served index only what will arrive.
+        let offered = LocalFonts.servable(current)
+        publish(offered.entries, scan: { faces in
             Scan(files: fileCount, faces: faces, duration: elapsed,
-                 parsed: parsedCount, bytesRead: bytesRead, trusted: trustedCount)
+                 parsed: parsedCount, bytesRead: bytesRead, trusted: trustedCount,
+                 unreadable: unreadable, staged: stagedCount, needsRescan: offered.held)
         })
-        _ = faces
 
         // Never write over a record a newer build owns; see snapshotIsFromNewerBuild.
         if LocalFonts.snapshotIsFromNewerBuild() {
@@ -450,16 +634,20 @@ final class LocalFonts {
             refresh(gated: gated)
             return true
         }
-        let usable = gated == .exclude ? stored.filter { !$0.value.gated } : stored
+        let allowed = gated == .exclude ? stored.filter { !$0.value.gated } : stored
+        let offered = LocalFonts.servable(allowed)
+        let usable = offered.entries
         let trusted = usable.values.filter(\.gated).count
 
         publish(usable, scan: { faces in
             Scan(files: usable.count - trusted, faces: faces, duration: 0,
-                 parsed: 0, bytesRead: 0, trusted: trusted)
+                 parsed: 0, bytesRead: 0, trusted: trusted, needsRescan: offered.held)
         })
         rememberSnapshotFingerprint()
         Log.info("adopted the record: \(faceCount) local face(s)"
-               + (trusted > 0 ? ", \(trusted) from folders this process never opens" : ""))
+               + (trusted > 0 ? ", \(trusted) from folders this process never opens" : "")
+               + (offered.held > 0
+                  ? "; \(offered.held) more waiting on `untofu folders --rescan`" : ""))
         return true
     }
 
@@ -561,7 +749,97 @@ final class LocalFonts {
         let modified: Double
     }
 
-    private static func fontFiles(in stash: Stash) -> [Found] {
+    /// Splits a set of recorded entries into what can be offered and how many
+    /// cannot; see `cannotBeServed`.
+    private static func servable(_ entries: [String: Entry]) -> (entries: [String: Entry], held: Int) {
+        let sources = stagedSourcePrefixes
+        let staging = canonical(stagingRoot.path) + "/"
+        let usable = entries.filter {
+            !cannotBeServed($0.key, $0.value, sources: sources, staging: staging)
+        }
+        return (usable, entries.count - usable.count)
+    }
+
+    // MARK: - Staging
+
+    /// The private copy's location: the file's path below its stash, kept whole
+    /// so that two families' files with the same name cannot collide.
+    private static func stagedURL(for file: URL, in stash: Stash, slug: String) -> URL {
+        let base = stash.url.standardizedFileURL.pathComponents
+        let full = file.standardizedFileURL.pathComponents
+        let relative = full.count > base.count && Array(full.prefix(base.count)) == base
+            ? Array(full.dropFirst(base.count)) : [file.lastPathComponent]
+        return relative.reduce(stagingRoot.appendingPathComponent(slug, isDirectory: true)) {
+            $0.appendingPathComponent($1)
+        }
+    }
+
+    private static func size(of url: URL) -> Int64? {
+        var info = stat()
+        guard stat(url.path, &info) == 0 else { return nil }
+        return Int64(info.st_size)
+    }
+
+    /// Copies one file into place, whole or not at all.
+    ///
+    /// Written beside the destination and renamed over it, so the agent — which
+    /// may be offering this very path to an application at this very moment —
+    /// sees either the old bytes or the new ones. On APFS the copy is a clone
+    /// and costs no disk.
+    private static func stage(_ source: URL, to destination: URL) -> Bool {
+        let fm = FileManager.default
+        let directory = destination.deletingLastPathComponent()
+        let scratch = directory.appendingPathComponent(Cache.scratchName())
+        do {
+            try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+            try fm.copyItem(at: source, to: scratch)
+        } catch {
+            try? fm.removeItem(at: scratch)
+            return false
+        }
+        guard rename(scratch.path, destination.path) == 0 else {
+            try? fm.removeItem(at: scratch)
+            return false
+        }
+        return true
+    }
+
+    /// Removes every copy under one stash's staging directory that the walk
+    /// just finished did not account for.
+    private static func pruneStaged(_ slug: String, keeping kept: Set<String>) {
+        let fm = FileManager.default
+        let root = stagingRoot.appendingPathComponent(slug, isDirectory: true)
+        guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey])
+        else { return }
+
+        var directories: [URL] = []
+        for case let url as URL in walker {
+            if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                directories.append(url)
+                continue
+            }
+            if kept.contains(url.path) { continue }
+            // Another process's copy, mid-flight. Same rule as the fetch cache:
+            // only the dead leave things worth sweeping.
+            let name = url.lastPathComponent
+            if name.hasPrefix(".incoming"), let owner = Cache.scratchOwner(name),
+               owner != getpid(), Cache.processIsAlive(owner) { continue }
+            try? fm.removeItem(at: url)
+        }
+        // Deepest first; rmdir refuses a directory that still has something in it.
+        for directory in directories.sorted(by: { $0.path.count > $1.path.count }) {
+            rmdir(directory.path)
+        }
+        rmdir(root.path)
+    }
+
+    private enum Listing {
+        case files([Found])
+        case absent
+        case denied
+    }
+
+    private static func fontFiles(in stash: Stash) -> Listing {
         var out: [Found] = []
         var frontier = [(url: stash.url, depth: 0)]
         let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey, .contentModificationDateKey]
@@ -569,9 +847,21 @@ final class LocalFonts {
         while let current = frontier.popLast() {
             let options: FileManager.DirectoryEnumerationOptions =
                 stash.includeHidden ? [] : [.skipsHiddenFiles]
-            let contents = (try? FileManager.default.contentsOfDirectory(
-                at: current.url, includingPropertiesForKeys: keys,
-                options: options)) ?? []
+            let contents: [URL]
+            do {
+                contents = try FileManager.default.contentsOfDirectory(
+                    at: current.url, includingPropertiesForKeys: keys, options: options)
+            } catch {
+                // The root decides. A subfolder that will not open is skipped as
+                // it always was — Downloads is full of other people's
+                // directories — but a root that will not open means nothing
+                // below it was looked at, and the caller must not mistake that
+                // for a folder with no fonts in it.
+                if current.depth == 0 {
+                    return presence(of: stash.url) == .absent ? .absent : .denied
+                }
+                continue
+            }
 
             for entry in contents {
                 let values = try? entry.resourceValues(forKeys: Set(keys))
@@ -592,6 +882,6 @@ final class LocalFonts {
                     modified: values?.contentModificationDate?.timeIntervalSince1970 ?? 0))
             }
         }
-        return out
+        return .files(out)
     }
 }

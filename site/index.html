@@ -297,6 +297,13 @@ opening the directories</strong> — which works because a font provider never
 reads the file it names. The application does, through the sandbox extension
 CoreText issues for the returned path.</p>
 
+<p>One exception: a font inside another application's container, such as Office's
+cloud font cache. Recent macOS (seen on 27.2.1) refuses, silently, to let a
+background agent hand those out, so <code>untofu folders --allow</code> copies
+them into untofu's own folder and the agent serves the copy.
+<code>--rescan</code> keeps the copies in step and <code>--deny</code> deletes
+them.</p>
+
 <p><code>untofu local</code> shows exactly what would be served and where each
 face came from. <code>--no-local</code> turns the whole thing off.</p>
 

@@ -192,6 +192,17 @@ baseline    font absent, no agent           6656B  sha:e106a38dd373
 test        agent serving, never opened it  3876B  sha:2f1ec69c60d6
 ```
 
+**With one exception: another application's container.** Seen on macOS 27.2.1: the
+system will not issue that sandbox extension for a file inside, say, Office's
+group container unless the application asking — or the agent — already has
+permission to read it. It does not prompt and it does not fail loudly: the agent
+is told nothing and the application quietly gets a substitute. So `untofu folders
+--allow` copies fonts it finds in a container into untofu's own directory
+(`~/Library/Application Support/untofu/staged`), and the agent serves the copy. A
+rescan keeps the copies in step, deleting any whose original is gone, and
+`untofu folders --deny` removes them all. A record made by an older version is
+not served from in place; `untofu status` says when a rescan is owed.
+
 `untofu folders` lists which locations are read directly and which are served
 from the record.
 

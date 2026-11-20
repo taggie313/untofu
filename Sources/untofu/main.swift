@@ -240,6 +240,14 @@ case "run":
                             + String(format: "%.0f", Double(scan.bytesRead) / 1_048_576) + " MB)")
                        + (scan.trusted > 0
                           ? " + \(scan.trusted) trusted from the recorded index" : ""))
+                if scan.needsRescan > 0 {
+                    // Said once, at startup, because the alternative is what this
+                    // replaced: logging a serve that renders as a substitute.
+                    Log.warn("\(scan.needsRescan) recorded font file(s) are not being served: "
+                           + "they sit inside another application's container, and macOS no "
+                           + "longer lets a background agent hand those out. "
+                           + "`untofu folders --rescan` copies them somewhere it can.")
+                }
             }
         }
     }
@@ -379,6 +387,12 @@ case "status":
             + (LocalFonts.recordHasGatedEntries
                ? " (`untofu folders`)"
                : " — but nothing recorded; run `untofu folders --rescan`"))
+        let held = LocalFonts.recordNeedsRescan
+        if held > 0 {
+            print("            ⚠︎ \(held) recorded font file(s) are NOT being served — macOS no longer")
+            print("              lets the agent hand out files from another app's container.")
+            print("              Run `untofu folders --rescan` to copy them somewhere it can.")
+        }
     } else {
         print("folders:    excluding Downloads and app containers (`untofu folders`)")
     }
@@ -611,6 +625,14 @@ case "local":
             print("\(scan.trusted) face-bearing file(s) served from the recorded index "
                 + "without opening them — `untofu folders --rescan` re-reads those.")
         }
+        for label in scan.unreadable {
+            print("⚠︎ macOS refused access to \(label); what was recorded from it before is kept. "
+                + "`untofu folders --rescan` says more.")
+        }
+        if scan.needsRescan > 0 {
+            print("⚠︎ \(scan.needsRescan) recorded file(s) are not being served — "
+                + "`untofu folders --rescan` copies them somewhere the agent can use.")
+        }
     }
     print("These are served to any application that asks. `--no-local` turns that off.")
 
@@ -623,7 +645,7 @@ case "folders":
         preferences.update { $0.searchPersonalFolders = allow }
         let warmed = LocalFonts()
         if allow {
-            print("macOS will ask permission once per location. Answering here is the")
+            print("macOS may ask permission once per location. Answering here is the")
             print("whole point of this command: the agent never asks, because a grant")
             print("given to it does not stick — it re-prompted on a later restart of")
             print("the same binary. So the reading happens here, once, and the agent")
@@ -636,10 +658,32 @@ case "folders":
         } else {
             print("Leaving them alone, and dropping them from the index…")
             warmed.refresh(gated: .exclude)
+            LocalFonts.removeStagedCopies()
         }
         if let scan = warmed.summary {
             print("\(scan.faces) face(s) from \(scan.files) file(s)"
                 + (scan.parsed > 0 ? ", \(scan.parsed) read" : ""))
+            if scan.staged > 0 {
+                print("")
+                print("Copied \(scan.staged) font file(s) out of another application's container, to")
+                print("  \(LocalFonts.stagingRoot.path)")
+                print("macOS will not let a background agent hand out files from inside one,")
+                print("so those are served from the copy. A rescan keeps it in step.")
+            }
+            for label in scan.unreadable {
+                let where_ = gated.first { $0.label == label }?.url.path ?? label
+                print("")
+                print("⚠︎ macOS refused access to \(label):")
+                print("    \(where_)")
+                print("  Nothing there was read. What was recorded from it before is kept.")
+                print("  Give the application you ran this from access to it under")
+                print("  System Settings → Privacy & Security, then run this again.")
+            }
+            if scan.needsRescan > 0 {
+                print("")
+                print("⚠︎ \(scan.needsRescan) recorded font file(s) still cannot be served, because the")
+                print("  folder they are in could not be read just now.")
+            }
         }
         // The agent is holding an index built under the old setting.
         LaunchAgent.reloadRunningAgent()
@@ -660,11 +704,20 @@ case "folders":
     print("")
     if on {
         print("The agent serves these from what was recorded here; it never opens")
-        print("them itself, so it cannot interrupt you at login.")
+        print("them itself, so it cannot interrupt you at login. Fonts found inside")
+        print("another application's container are served from a copy kept in")
+        print("  \(LocalFonts.stagingRoot.path)")
         if !LocalFonts.recordHasGatedEntries {
             print("")
             print("  ⚠︎ Nothing from them is recorded, so none of it is being served.")
             print("    Run `untofu folders --rescan` to read them.")
+        }
+        let held = LocalFonts.recordNeedsRescan
+        if held > 0 {
+            print("")
+            print("  ⚠︎ \(held) recorded font file(s) are NOT being served: they were recorded")
+            print("    in place, inside another app's container, and macOS no longer")
+            print("    lets the agent hand those out. Run `untofu folders --rescan`.")
         }
         print("")
         print("  untofu folders --rescan   re-read them (after installing new fonts)")
