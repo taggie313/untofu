@@ -25,6 +25,22 @@ PASS=0; FAIL=0
 # PREVIOUS one, which will happily discard a record it does not understand and
 # rewrite its own. That produced four failures that had nothing to do with the
 # code being tested. Stop it for the duration and put it back on the way out.
+# One run at a time. Every run backs up the real state directory at the start and
+# puts it back at the end, so two that overlap restore each other's half-finished
+# test state over the user's real files — and two agents answering the same font
+# requests make both sets of results meaningless. Not hypothetical: two sessions
+# sharing this checkout were both running it.
+RUNLOCK="$HOME/Library/Application Support/untofu-selftest.lock"
+if ! mkdir "$RUNLOCK" 2>/dev/null; then
+  OWNER=$(cat "$RUNLOCK/pid" 2>/dev/null)
+  if [ -n "$OWNER" ] && kill -0 "$OWNER" 2>/dev/null; then
+    echo "another selftest run (pid $OWNER) is in progress; refusing to overlap it."
+    exit 3
+  fi
+  rm -rf "$RUNLOCK"; mkdir "$RUNLOCK" || exit 3     # left behind by a run that died
+fi
+echo $$ > "$RUNLOCK/pid"
+
 BREW_SVC_WAS_RUNNING=0
 if brew services list 2>/dev/null | grep -qE '^untofu +started'; then
   BREW_SVC_WAS_RUNNING=1
@@ -64,6 +80,7 @@ done
 # what happened after each release run before this.
 restore_all() {
   [ "$BREW_SVC_WAS_RUNNING" = "1" ] && brew services start untofu >/dev/null 2>&1
+  rm -rf "$RUNLOCK"
   return 0
 }
 
