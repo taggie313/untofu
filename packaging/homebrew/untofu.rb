@@ -60,9 +60,26 @@ class Untofu < Formula
     #
     # --disable-sandbox: SwiftPM wants to write its own build tree, which
     # Homebrew's build sandbox otherwise denies.
+    #
+    # -platform_version: Swift 6.4's build system stamps the deployment target
+    # (12.0) into the binary as the SDK it was built with. AppKit reads that
+    # field to decide how an application draws and behaves, so without this the
+    # dialogs come out with the controls of a release five years old. 12.0 is
+    # the minimum from Package.swift; the last argument is the SDK really used.
+    sdk = Utils.safe_popen_read("xcrun", "--show-sdk-version").strip
     system "swift", "build", "--disable-sandbox", "--configuration", "release",
-                             "--arch", "arm64", "--arch", "x86_64"
-    bin.install ".build/apple/Products/Release/untofu"
+                             "--arch", "arm64", "--arch", "x86_64",
+                             "-Xlinker", "-platform_version", "-Xlinker", "macos",
+                             "-Xlinker", "12.0", "-Xlinker", sdk
+    # Where the product lands depends on the toolchain: Swift 6.4 moved a
+    # multi-architecture build from .build/apple to .build/out, and a formula
+    # that names only one of them fails to install on the other.
+    built = %w[
+      .build/out/Products/Release/untofu
+      .build/apple/Products/Release/untofu
+    ].find { |candidate| File.exist?(candidate) }
+    odie "swift build finished but left no untofu binary in .build" if built.nil?
+    bin.install built
   end
 
   service do

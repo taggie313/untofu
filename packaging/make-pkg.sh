@@ -44,8 +44,37 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/root/usr/local/bin" "$WORK/root/Library/LaunchAgents" dist
 
 echo "==> building universal binary"
-swift build -c release --arch arm64 --arch x86_64 >/dev/null
-cp .build/apple/Products/Release/untofu "$WORK/root/usr/local/bin/untofu"
+# Two things changed underneath this with Swift 6.4 (Xcode 27.2), and the first
+# one stopped the 0.4.11 package being built at all.
+#
+# Where the product lands. SwiftPM's new default build system writes a
+# multi-architecture build to .build/out/Products/Release; the old one wrote to
+# .build/apple/Products/Release. Look in both, take the NEWEST, and then refuse
+# it unless it reports the version being packaged — a long-lived checkout still
+# has last release's binary sitting at the old path, and shipping that under a
+# new version number would be the worst possible way to get this wrong.
+#
+# What SDK the binary says it was built with. The new build system stamps the
+# deployment target (12.0) into that field instead of the SDK it really used.
+# AppKit reads it to decide how an application draws and behaves, so a binary
+# stamped 12.0 gets the pre-macOS-26 controls: rendered side by side, the miss
+# panel from such a build differs from 0.4.10's, and with the stamp corrected it
+# is byte-identical. The 12.0 here is the minimum from Package.swift.
+SDK_VERSION=$(xcrun --show-sdk-version)
+swift build -c release --arch arm64 --arch x86_64 \
+    -Xlinker -platform_version -Xlinker macos -Xlinker 12.0 -Xlinker "$SDK_VERSION" >/dev/null
+BUILT=""
+for candidate in .build/out/Products/Release/untofu .build/apple/Products/Release/untofu; do
+  [ -f "$candidate" ] || continue
+  if [ -z "$BUILT" ] || [ "$candidate" -nt "$BUILT" ]; then BUILT="$candidate"; fi
+done
+[ -n "$BUILT" ] || { echo "  ✗ swift build finished but left no universal binary in .build" >&2; exit 1; }
+[ "$("$BUILT" --version 2>/dev/null)" = "untofu $VERSION" ] \
+  || { echo "  ✗ $BUILT says '$("$BUILT" --version 2>/dev/null)', not 'untofu $VERSION'" >&2; exit 1; }
+lipo "$BUILT" -verify_arch arm64 x86_64 \
+  || { echo "  ✗ $BUILT is not universal" >&2; exit 1; }
+echo "    $BUILT ($(lipo -archs "$BUILT"), SDK $SDK_VERSION)"
+cp "$BUILT" "$WORK/root/usr/local/bin/untofu"
 
 echo "==> signing the binary"
 # Hardened runtime is required for notarisation. Signed even in an unsigned
