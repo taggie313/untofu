@@ -449,6 +449,14 @@ final class LocalFonts {
         let stored = LocalFonts.loadSnapshot()
         let previous = rebuild ? [:] : stored
 
+        // Test seam, undocumented: hold the walk open between reading the record
+        // and writing it, so two walks can be made to overlap on demand. A real
+        // walk takes 0.1s warm and half a minute cold, and neither is a test.
+        if let raw = ProcessInfo.processInfo.environment["UNTOFU_TEST_WALK_DELAY"],
+           let seconds = Double(raw), seconds > 0 {
+            Thread.sleep(forTimeInterval: seconds)
+        }
+
         var current: [String: Entry] = [:]
         var fileCount = 0
         var parsedCount = 0
@@ -539,16 +547,45 @@ final class LocalFonts {
             if let slug = stash.stagedAs { LocalFonts.pruneStaged(slug, keeping: kept) }
         }
 
-        // Carry forward what the CLI recorded and this process must not look at.
-        // Taken entirely on trust: a file deleted since the last walk leaves a
-        // path CoreText simply rejects, which degrades to the behaviour before
-        // any of this existed. `untofu folders --rescan` refreshes them.
-        if gated == .trustSnapshot {
-            for (path, entry) in stored where entry.gated && current[path] == nil {
-                current[path] = entry
-                trustedCount += 1
+        // Carry forward what the CLI recorded and this process must not look at,
+        // and write the record, as ONE step that no other process can get into
+        // the middle of. Taken entirely on trust: a file deleted since the last
+        // walk leaves a path CoreText simply rejects. `untofu folders --rescan`
+        // refreshes them.
+        //
+        // These used to be carried from the record as it stood when the walk
+        // BEGAN. A walk takes a tenth of a second warm and half a minute cold,
+        // and for all of that time a foreground `folders --rescan` can finish
+        // and write what it found. This process then wrote its own map over the
+        // top, built from the older record, and the rescan was gone. Measured:
+        // two gated entries on disk straight after the rescan, none once the
+        // agent's walk completed. `walkLock` fixed two walks in ONE process;
+        // this was the same loss across two.
+        //
+        // So they are read again here, at the last moment, under a lock every
+        // save takes. A process that trusts the record never produces gated
+        // entries of its own, which makes the file the only authority on them.
+        var written: String?
+        LocalFonts.withRecordLock {
+            if gated == .trustSnapshot {
+                for (path, entry) in LocalFonts.loadSnapshot()
+                where entry.gated && current[path] == nil {
+                    current[path] = entry
+                    trustedCount += 1
+                }
             }
+            // Never write over a record a newer build owns; see snapshotIsFromNewerBuild.
+            if LocalFonts.snapshotIsFromNewerBuild() {
+                Log.debug("not saving: local-index.json belongs to a newer build")
+            } else {
+                LocalFonts.saveSnapshot(current)
+            }
+            // Taken inside the lock, so it is this write's fingerprint and not
+            // that of a rescan which landed a millisecond later — remembering
+            // someone else's write as our own would make the watch ignore it.
+            written = LocalFonts.snapshotFingerprint()
         }
+        lock.lock(); lastFingerprint = written; lock.unlock()
 
         let elapsed = Date().timeIntervalSince(started)
         // The record keeps everything; the served index only what will arrive.
@@ -558,14 +595,6 @@ final class LocalFonts {
                  parsed: parsedCount, bytesRead: bytesRead, trusted: trustedCount,
                  unreadable: unreadable, staged: stagedCount, needsRescan: offered.held)
         })
-
-        // Never write over a record a newer build owns; see snapshotIsFromNewerBuild.
-        if LocalFonts.snapshotIsFromNewerBuild() {
-            Log.debug("not saving: local-index.json belongs to a newer build")
-        } else {
-            LocalFonts.saveSnapshot(current)
-        }
-        rememberSnapshotFingerprint()
 
         Log.debug("local index: \(faceCount) face(s) from \(fileCount) walked "
                 + "+ \(trustedCount) trusted, in \(String(format: "%.2f", elapsed))s "
@@ -730,6 +759,20 @@ final class LocalFonts {
                    + "permission-gated folders (`untofu folders --rescan` refreshes those)")
         }
         return carried
+    }
+
+    /// Cross-process lock around reading the record's gated entries and writing
+    /// the record back. Held for milliseconds, never for a walk.
+    private static func withRecordLock(_ body: () -> Void) {
+        try? FileManager.default.createDirectory(
+            at: Cache.root, withIntermediateDirectories: true)
+        let fd = open(Cache.root.appendingPathComponent("local-index.lock").path,
+                      O_CREAT | O_RDWR, 0o644)
+        guard fd >= 0 else { body(); return }   // no lock is better than no record
+        flock(fd, LOCK_EX)
+        body()
+        flock(fd, LOCK_UN)
+        close(fd)
     }
 
     private static func saveSnapshot(_ files: [String: Entry]) {

@@ -649,6 +649,65 @@ json.dump(d, open(p,'w'))"
   check "$([ -e "$STAGED" ] && echo left || echo gone)" "gone" \
         "and its copy is deleted with it"
 
+  # --- walks that overlap ----------------------------------------------------
+  # A walk reads the record, works, and writes the record back whole. Two that
+  # overlap each write their own view and the later one wins. A real walk takes
+  # a tenth of a second warm and half a minute cold, neither of which is a test,
+  # so UNTOFU_TEST_WALK_DELAY holds one open between the read and the write.
+  wait_for_walks() {   # $1 = how many finished walks, $2 = seconds to allow
+    local waited=0
+    while [ "$waited" -lt "$(( ${2:-20} * 5 ))" ]; do
+      [ "$(grep -c 'debug: local index:' "$CACHE/.walk.log" 2>/dev/null)" -ge "$1" ] && return 0
+      sleep 0.2; waited=$((waited+1))
+    done
+    return 1
+  }
+  start_slow_agent() { # $1 = seconds each walk is held open
+    UNTOFU_TEST_WALK_DELAY="$1" $BIN run --quiet -v > "$CACHE/.walk.log" 2>&1 &
+    WALKPID=$!
+    local waited=0
+    while [ "$waited" -lt 50 ] && ! grep -q 'untofu running' "$CACHE/.walk.log" 2>/dev/null; do
+      sleep 0.2; waited=$((waited+1))
+    done
+    sleep 0.5          # inside its first walk now, and holding it
+  }
+
+  # Two in one process: the startup walk, and the one a SIGHUP asks for. Without
+  # the walk lock both begin from the same empty record and both read every
+  # file; with it the second waits and finds the work already done.
+  rm -f "$CACHE/local-index.json"
+  start_slow_agent 2
+  kill -HUP $WALKPID
+  wait_for_walks 2 20
+  kill $WALKPID 2>/dev/null; wait $WALKPID 2>/dev/null
+  WALKREADS=$(grep 'debug: local index:' "$CACHE/.walk.log" | sed -E 's/.*\(([0-9]+) read\).*/\1/' | tr '\n' ' ')
+  # The first number is the control: zero would mean the record was already
+  # warm, and then the second being zero proves nothing at all.
+  check "$([ "$(echo $WALKREADS | cut -d' ' -f1)" -gt 0 ] 2>/dev/null && echo 1 || echo 0)" "1" \
+        "control: the first of two overlapping walks really reads the files (read: $WALKREADS)"
+  check "$(echo $WALKREADS | cut -d' ' -f2)" "0" \
+        "the second waits for the first and re-reads nothing"
+
+  # Two in different processes: the agent is mid-walk, holding a record that
+  # knows nothing of a font, when a foreground rescan records it. The agent used
+  # to finish and write its older view over the top — the rescan reported
+  # success and the font was gone a moment later.
+  rm -f "$PLANTED"
+  $BIN folders --rescan >/dev/null 2>&1
+  start_slow_agent 3
+  cp "$LOCALSRC" "$PLANTED"
+  $BIN folders --rescan >/dev/null 2>&1
+  check "$($BIN explain Lora-Regular | grep -c '^local: *Test folder')" "1" \
+        "control: the rescan recorded the font while the agent was mid-walk"
+  wait_for_walks 2 20         # the walk it was in, and the one the rescan asked for
+  kill $WALKPID 2>/dev/null; wait $WALKPID 2>/dev/null
+  check "$(python3 -c "
+import json,os
+d=json.load(open(os.path.expanduser('$CACHE/local-index.json')))['files']
+print(sum(1 for k in d if os.path.realpath(k) == os.path.realpath('$PLANTED')))" 2>/dev/null)" "1" \
+        "and the agent finishing its own walk does not write over it"
+  rm -f "$PLANTED" "$CACHE/.walk.log"
+
   cp "$LOCALSRC" "$CONTAINED"
   $BIN folders --rescan >/dev/null 2>&1
   $BIN folders --deny >/dev/null 2>&1
