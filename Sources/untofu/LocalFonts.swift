@@ -439,7 +439,15 @@ final class LocalFonts {
     func refresh(rebuild: Bool = false, gated: GatedPolicy = .exclude) -> Int {
         walkLock.lock(); defer { walkLock.unlock() }
         let started = Date()
-        let previous = rebuild ? [:] : LocalFonts.loadSnapshot()
+        // `rebuild` means re-read what this process can read. It cannot mean
+        // forget what it cannot: the gated entries exist only because a
+        // foreground rescan recorded them, so they are carried from the stored
+        // record whatever `rebuild` says. They used to be carried from
+        // `previous`, which a rebuild empties — so `untofu local --rebuild`
+        // silently deleted every font recorded from Downloads, Adobe and
+        // Office's cache, and had done since the walk and the serve were split.
+        let stored = LocalFonts.loadSnapshot()
+        let previous = rebuild ? [:] : stored
 
         var current: [String: Entry] = [:]
         var fileCount = 0
@@ -474,7 +482,7 @@ final class LocalFonts {
                 // the only reason those fonts still work. Keep the record, say so.
                 guard stash.needsPermission else { continue }
                 unreadable.append(stash.label)
-                for (path, entry) in previous where entry.gated && entry.origin == stash.label {
+                for (path, entry) in stored where entry.gated && entry.origin == stash.label {
                     current[path] = entry
                     trustedCount += 1
                 }
@@ -536,7 +544,7 @@ final class LocalFonts {
         // path CoreText simply rejects, which degrades to the behaviour before
         // any of this existed. `untofu folders --rescan` refreshes them.
         if gated == .trustSnapshot {
-            for (path, entry) in previous where entry.gated && current[path] == nil {
+            for (path, entry) in stored where entry.gated && current[path] == nil {
                 current[path] = entry
                 trustedCount += 1
             }

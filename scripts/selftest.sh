@@ -559,6 +559,14 @@ d=json.load(open(os.path.expanduser('$CACHE/local-index.json')))
 print(1 if any(e['gated'] for e in d['files'].values()) else 0)" 2>/dev/null)" "1" \
         "the record marks which entries came from gated stashes"
 
+  # --rebuild means "re-read everything", and a plain run cannot re-read a gated
+  # folder. It used to forget them instead: the carry-forward read from a record
+  # that --rebuild had just emptied, so one `untofu local --rebuild` deleted
+  # every font recorded from Downloads, Adobe and Office's cache.
+  $BIN local --rebuild >/dev/null 2>&1
+  check "$($BIN explain Lora-Regular | grep -c '^local: *Test folder')" "1" \
+        "--rebuild keeps what was recorded from the gated folders"
+
   rm -f "$PLANTED"
   $BIN folders --rescan >/dev/null 2>&1
   check "$($BIN explain Lora-Regular | grep -c '^local: *not found')" "1" \
